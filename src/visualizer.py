@@ -1,17 +1,22 @@
 import pandas as pd
 import plotly.graph_objects as go
 
-def create_vol_surface(df: pd.DataFrame, ticker: str):
+def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both"):
     """
     Create an interactive 3D volatility surface plot.
     
     Args:
         df: Cleaned DataFrame with options data
         ticker: Stock ticker symbol for the title
+        option_type: Type of the option ('call', 'put', or 'both') to filter the data
     """
     if df.empty:
         print("No data to plot")
         return
+    
+    # Filter data based on option type
+    if option_type in ['call', 'put']:
+        df = df[df['optionType'] == option_type]
     
     # Create the 3D surface plot
     fig = go.Figure(data=[
@@ -44,9 +49,9 @@ def create_vol_surface(df: pd.DataFrame, ticker: str):
 
     # Update the layout
     fig.update_layout(
-        title=f'Implied Volatility Surface - {ticker}',
+        title=f'{ticker} {option_type.capitalize() if option_type != "both" else "Call and Put"} Option Volatility Surface',
         scene=dict(
-            xaxis_title='Strike Price ($)',
+            xaxis_title='Strike Price',
             yaxis_title='Days to Expiration',
             zaxis_title='Implied Volatility (%)',
             camera=dict(
@@ -60,19 +65,27 @@ def create_vol_surface(df: pd.DataFrame, ticker: str):
 
     return fig
 
+# Test the function
 if __name__ == "__main__":
+    # This test assumes you have a 'cleaned_options_data.csv' file from data_cleaner.py
+    # or you can load and clean data here directly for a self-contained test.
     try:
-        # Read the cleaned data
-        input_file = 'cleaned_options_data.csv'
-        data = pd.read_csv(input_file)
-        print(f"Loaded {len(data)} rows of cleaned data")
-          # Create the plot and save to HTML
-        fig = create_vol_surface(data, "XLY")
-        if fig:
-            output_file = 'volatility_surface.html'
-            fig.write_html(output_file)
-            print(f"Plot saved to {output_file}")
-            print("Open this file in your web browser to view the interactive plot")
+        cleaned_data = pd.read_csv("cleaned_options_data.csv")
+        if not cleaned_data.empty:
+            # Ensure 'optionType' column exists for the title, or provide a default
+            option_type_for_title = cleaned_data['optionType'].iloc[0] if 'optionType' in cleaned_data.columns and not cleaned_data.empty else "both"
             
+            # For testing, let's assume a ticker and use the first option type found or 'both'
+            test_ticker = "SPY" # Example ticker
+            
+            fig = create_vol_surface(cleaned_data, test_ticker, option_type_for_title)
+            fig.write_html("volatility_surface.html")
+            print(f"Volatility surface plot saved to volatility_surface.html for {test_ticker}")
+        else:
+            print("Cleaned data is empty, skipping plot generation.")
+    except FileNotFoundError:
+        print("cleaned_options_data.csv not found. Run data_cleaner.py to generate it.")
     except Exception as e:
-        print(f"Error creating visualization: {str(e)}")
+        print(f"An error occurred during visualizer test: {e}")
+
+

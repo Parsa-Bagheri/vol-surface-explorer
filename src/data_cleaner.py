@@ -6,7 +6,9 @@ def prepare_options_data(
     min_strike: float = None,
     max_strike: float = None,
     min_date: str = None,
-    max_date: str = None
+    max_date: str = None,
+    option_type_to_plot: str = 'both',  # New parameter: 'call', 'put', or 'both'
+    max_dte: int = None  # New parameter for maximum days to expiration
 ):
     """
     Clean and filter options data for visualization.
@@ -17,6 +19,7 @@ def prepare_options_data(
         max_strike: Maximum strike price to include
         min_date: Minimum date (YYYY-MM-DD)
         max_date: Maximum date (YYYY-MM-DD)
+        option_type_to_plot (str): 'call', 'put', or 'both' to filter by. Default is 'both'.
     
     Returns:
         Cleaned DataFrame with necessary columns for volatility surface
@@ -27,7 +30,21 @@ def prepare_options_data(
 
     # Create working copy
     clean_df = df.copy()
+
+    # Filter by option type if specified before other processing
+    if option_type_to_plot.lower() == 'call':
+        clean_df = clean_df[clean_df['optionType'] == 'call'].copy()
+        print(f"Filtering for CALL options. Rows remaining: {len(clean_df)}")
+    elif option_type_to_plot.lower() == 'put':
+        clean_df = clean_df[clean_df['optionType'] == 'put'].copy()
+        print(f"Filtering for PUT options. Rows remaining: {len(clean_df)}")
+    elif option_type_to_plot.lower() != 'both':
+        print(f"Warning: Invalid option_type_to_plot '{option_type_to_plot}'. Using 'both'.")
     
+    if clean_df.empty:
+        print(f"No data remaining after filtering for option type: {option_type_to_plot}")
+        return pd.DataFrame()
+
     # Convert dates to datetime
     clean_df['expirationDate'] = pd.to_datetime(clean_df['expirationDate'])
     
@@ -49,6 +66,11 @@ def prepare_options_data(
         max_date = pd.Timestamp(max_date)
         clean_df = clean_df[clean_df['expirationDate'] <= max_date]
     
+    # Filter by max_dte if provided
+    if max_dte is not None:
+        clean_df = clean_df[clean_df['days_to_expiration'] <= max_dte]
+        print(f"Filtering for DTE <= {max_dte}. Rows remaining: {len(clean_df)}")
+
     # Remove invalid data
     clean_df = clean_df[
         (clean_df['impliedVolatility'] > 0) &  # Remove zero/negative volatility
@@ -63,6 +85,15 @@ def prepare_options_data(
           (clean_df['openInterest'] < OI_THRESHOLD))
     ]
 
+    # Convert impliedVolatility to percentage points
+    # Yahoo Finance provides IV as decimal (e.g., 0.25 for 25%)
+    if 'impliedVolatility' in clean_df.columns and not clean_df['impliedVolatility'].empty:
+        # Check if IV is likely in decimal format (e.g., max IV < 1.5, typical IVs are 10-100%+)
+        # This heuristic might need adjustment based on typical IV ranges for assets.
+        # A more robust check might involve looking at a sample or assuming format based on source.
+        if clean_df['impliedVolatility'].max() < 1.5 and clean_df['impliedVolatility'].min() >= 0:
+            clean_df['impliedVolatility'] = clean_df['impliedVolatility'] * 100
+            print("Scaled impliedVolatility by 100.")
     # Select and rename columns for visualization
     final_df = clean_df[[
         'strike',
@@ -85,13 +116,23 @@ if __name__ == "__main__":
         # Read the CSV we created in data_fetch
         input_file = 'options_data.csv'
         raw_data = pd.read_csv(input_file)
-        print(f"Loaded {len(raw_data)} rows of raw data")
+        print(f"Loaded {len(raw_data)} rows of raw data from {input_file}")
+
+        # Define date range for testing (next 3 months)
+        today_date = datetime.now()
+        three_months_later = today_date + timedelta(days=90)
+        min_test_date = today_date.strftime('%Y-%m-%d')
+        max_test_date = three_months_later.strftime('%Y-%m-%d')
         
         # Clean the data
         clean_data = prepare_options_data(
             raw_data,
-            min_strike=raw_data['strike'].min(),
-            max_strike=raw_data['strike'].max()
+            min_strike=raw_data['strike'].min(), # Or a more specific test range
+            max_strike=raw_data['strike'].max(), # Or a more specific test range
+            # min_date=min_test_date, # Using DTE for date range now
+            # max_date=max_test_date,
+            max_dte=90, # Test with 90 days DTE
+            option_type_to_plot='call'  # Specify 'call' for testing
         )
         
         if not clean_data.empty:

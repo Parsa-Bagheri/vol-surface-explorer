@@ -1,90 +1,114 @@
 import yfinance as yf
 import pandas as pd
+from typing import Optional, Tuple
 
-def get_options_data(ticker_symbol: str):
-    """
-    Fetches options chain data for a given stock ticker.
-      Args:
-        ticker_symbol (str): Stock ticker (e.g., 'XLY')
-        
-    Returns:
-        pd.DataFrame | None: DataFrame with options data or None if fetch fails
-    """
+def get_current_price(ticker_symbol: str) -> Optional[float]:
+    """Fetches the current market price for a given stock ticker."""
+    stock = yf.Ticker(ticker_symbol)
     try:
-        stock = yf.Ticker(ticker_symbol)
-        expiration_dates = stock.options
+        # Attempt to get the most recent closing price
+        current_price = stock.history(period="1d")['Close'].iloc[-1]
+        if pd.isna(current_price):
+            # Fallback to currentPrice or previousClose from info if history is NaN
+            info = stock.info
+            current_price = info.get('currentPrice') or info.get('previousClose')
         
-        all_options_data = []
-        for date in expiration_dates:
-            option_chain = stock.option_chain(date)
-            
-            # Process calls
-            calls = option_chain.calls
-            calls['expirationDate'] = pd.to_datetime(date)
-            calls['optionType'] = 'call'
-            
-            # Process puts
-            puts = option_chain.puts
-            puts['expirationDate'] = pd.to_datetime(date)
-            puts['optionType'] = 'put'
-            
-            all_options_data.extend([calls, puts])
-            
-        return pd.concat(all_options_data, ignore_index=True)
-        
+        if current_price is None:
+            print(f"Could not determine current price for {ticker_symbol} from available data.")
+            return None
+        return float(current_price)
     except Exception as e:
-        print(f"Error fetching data for {ticker_symbol}: {e}")
+        print(f"Error fetching current price for {ticker_symbol}: {e}")
         return None
 
+def get_options_data(ticker_symbol: str) -> pd.DataFrame:
+    """
+    Fetches all available call and put options data for a given stock ticker.
+    Strike range filtering will be applied in the data cleaning step.
+    """
+    stock = yf.Ticker(ticker_symbol)
+    options_data_list = []
+    available_dates = stock.options # Get all available expiration dates
 
+    if not available_dates:
+        print(f"No option expiration dates found for {ticker_symbol}.")
+        return pd.DataFrame()
+
+    print(f"Fetching options for {ticker_symbol} for {len(available_dates)} expiration dates...")
+
+    for date in available_dates:
+        try:
+            options_chain = stock.option_chain(date)
+            
+            # Add expirationDate and optionType to calls
+            calls = options_chain.calls
+            if not calls.empty:
+                calls['expirationDate'] = pd.to_datetime(date)
+                calls['optionType'] = 'call'
+                options_data_list.append(calls)
+
+            # Add expirationDate and optionType to puts
+            puts = options_chain.puts
+            if not puts.empty:
+                puts['expirationDate'] = pd.to_datetime(date)
+                puts['optionType'] = 'put'
+                options_data_list.append(puts)
+        except Exception as e:
+            print(f"Could not fetch options for {ticker_symbol} on {date}: {e}")
+            continue # Skip to next date if an error occurs
+
+    if not options_data_list:
+        print(f"No options data could be compiled for {ticker_symbol}.")
+        return pd.DataFrame()
+
+    combined_options_df = pd.concat(options_data_list, ignore_index=True)
+    
+    # Ensure 'impliedVolatility' is numeric, coercing errors
+    if 'impliedVolatility' in combined_options_df.columns:
+        combined_options_df['impliedVolatility'] = pd.to_numeric(combined_options_df['impliedVolatility'], errors='coerce')
+
+    print(f"Successfully fetched {len(combined_options_df)} total option contracts for {ticker_symbol}.")
+    return combined_options_df
+
+# Test the functions
 if __name__ == "__main__":
-    # Test configuration
-    ticker = 'XLY'
+    test_ticker = "SPY"
     
-    print(f"\nAttempting to fetch data for {ticker}...")
-    
-    try:
-        # Get current stock price
-        stock = yf.Ticker(ticker)
-        current_price = stock.info['regularMarketPrice']
-        print(f"Current {ticker} price: ${current_price:.2f}")
-        
-        # Set strike range: ±20% around current price
-        min_strike = int(current_price * 0.8)
-        max_strike = int(current_price * 1.2)
-        print(f"Strike range: ${min_strike} to ${max_strike}")
-        
-        # Fetch options data
-        test_data = get_options_data(ticker)
-        
-        if test_data is not None and not test_data.empty:
-            # Filter data by strike range
-            mask = (test_data['strike'] >= min_strike) & (test_data['strike'] <= max_strike)
-            test_data = test_data[mask]
-            
-            print("\nData fetch successful!")
-            print(f"Total rows (after filtering): {len(test_data)}")
-            print(f"Total expiration dates: {test_data['expirationDate'].nunique()}")
-            
-            print("\nFirst 5 rows of filtered data:")
-            print(test_data.head())
-            
-            print("\nSample of available data:")
-            print(f"Strike price range: ${test_data['strike'].min():.2f} to ${test_data['strike'].max():.2f}")
-            print(f"Expiration dates: {sorted(test_data['expirationDate'].unique()[:3])}")
+    # Test get_current_price
+    print(f"\nTesting get_current_price for {test_ticker}:")
+    current_price = get_current_price(test_ticker)
+    if current_price is not None:
+        print(f"Current price for {test_ticker}: ${current_price:.2f}")
+    else:
+        print(f"Failed to get current price for {test_ticker}.")
 
-            # Save to CSV
-            output_file = 'options_data.csv'
-            test_data.to_csv(output_file, index=False)
-            print(f"\nFull data saved to {output_file}")
-    
-        else:
-            print(f"\nNo data returned for {ticker}. Check if:")
-            print("1. Your internet connection is working")
-            print("2. The ticker symbol is valid")
-            print("3. The market is open and options data is available")
-    
-    except Exception as e:
-        print(f"\nError during test: {str(e)}")
-        print("Make sure you have required packages installed:")
-        print("conda install yfinance pandas")
+    # Test get_options_data
+    print(f"\nTesting get_options_data for {test_ticker}:")
+    options_df = get_options_data(test_ticker)
+
+    if not options_df.empty:
+        print(f"Fetched {len(options_df)} options contracts for {test_ticker}.")
+        print("Sample of fetched data:")
+        print(options_df.head())
+        
+        # Define a strike range based on current price for further local testing if needed
+        if current_price:
+            min_strike_test = current_price * 0.95
+            max_strike_test = current_price * 1.05
+            print(f"Test strike range (for local verification): ${min_strike_test:.2f} - ${max_strike_test:.2f}")
+            
+            # Example of filtering for local test (this logic is in data_cleaner.py for the main app)
+            # test_filtered_df = options_df[
+            #     (options_df['strike'] >= min_strike_test) & 
+            #     (options_df['strike'] <= max_strike_test)
+            # ]
+            # print(f"Locally filtered sample (strike range): {len(test_filtered_df)} contracts.")
+
+        # Save to CSV for inspection
+        try:
+            options_df.to_csv("options_data_all_raw.csv", index=False)
+            print("Raw options data saved to options_data_all_raw.csv")
+        except Exception as e:
+            print(f"Error saving raw options data to CSV: {e}")
+    else:
+        print(f"No options data fetched for {test_ticker}.")
