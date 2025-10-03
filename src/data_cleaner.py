@@ -79,21 +79,12 @@ def prepare_options_data(
     
     # Remove illiquid options (low volume AND low open interest)
     VOLUME_THRESHOLD = 5       # Minimum acceptable volume
-    OI_THRESHOLD = 20         # Minimum acceptable open interest
+    OI_THRESHOLD = 10         # Minimum acceptable open interest
     clean_df = clean_df[
         ~((clean_df['volume'] < VOLUME_THRESHOLD) & 
           (clean_df['openInterest'] < OI_THRESHOLD))
     ]
 
-    # Convert impliedVolatility to percentage points
-    # Yahoo Finance provides IV as decimal (e.g., 0.25 for 25%)
-    if 'impliedVolatility' in clean_df.columns and not clean_df['impliedVolatility'].empty:
-        # Check if IV is likely in decimal format (e.g., max IV < 1.5, typical IVs are 10-100%+)
-        # This heuristic might need adjustment based on typical IV ranges for assets.
-        # A more robust check might involve looking at a sample or assuming format based on source.
-        if clean_df['impliedVolatility'].max() < 1.5 and clean_df['impliedVolatility'].min() >= 0:
-            clean_df['impliedVolatility'] = clean_df['impliedVolatility'] * 100
-            print("Scaled impliedVolatility by 100.")
     # Select and rename columns for visualization
     final_df = clean_df[[
         'strike',

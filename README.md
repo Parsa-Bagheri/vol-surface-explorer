@@ -40,10 +40,16 @@ Options:
 
 ## Smoothing Feature
 
-The `--smooth` flag enables cubic interpolation of implied volatility values across a dense strike/DTE grid. This helps:
+The `--smooth` flag enables linear interpolation of implied volatility values across a dense strike/DTE grid. This helps:
 - Visualize smoother surfaces in areas with sparse data
 - Better identify patterns in illiquid strikes
 - Create more visually appealing surfaces
 
 The smoothing gracefully falls back to raw data if interpolation fails (e.g., insufficient data points).
+
+## For AI Coding Assistants
+
+This project includes specific guidance for AI tools in `.github/copilot-instructions.md`.
+GitHub Copilot users: This is automatically loaded.
+Other tools: See the instructions file for project-specific patterns.
 

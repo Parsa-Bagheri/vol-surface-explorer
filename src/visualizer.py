@@ -15,15 +15,23 @@ def _smooth_surface(df: pd.DataFrame, strike_step: float = 1.0, dte_step: int = 
     Returns:
         Tuple of (grid_strikes, grid_dtes, interpolated_ivs) as flattened arrays
     """
-    strikes = np.arange(df['strike'].min(), df['strike'].max() + strike_step, strike_step)
-    dtes = np.arange(df['days_to_expiration'].min(), df['days_to_expiration'].max() + dte_step, dte_step)
+    # Add padding to avoid edge effects - reduce grid range slightly
+    strike_min = df['strike'].min()
+    strike_max = df['strike'].max()
+    dte_min = df['days_to_expiration'].min()
+    dte_max = df['days_to_expiration'].max()
+    
+    # Create grid that stays within data bounds (no extrapolation)
+    strikes = np.arange(strike_min, strike_max + strike_step, strike_step)
+    dtes = np.arange(dte_min, dte_max + dte_step, dte_step)
     grid_strike, grid_dte = np.meshgrid(strikes, dtes)
     
     iv_grid = griddata(
         points=df[['strike', 'days_to_expiration']].to_numpy(),
         values=df['impliedVolatility'].to_numpy(),
         xi=(grid_strike, grid_dte),
-        method='cubic'
+        method='linear',
+        fill_value=np.nan  # Use NaN for points outside convex hull (prevents extrapolation spikes)
     )
     
     return grid_strike.ravel(), grid_dte.ravel(), iv_grid.ravel()
@@ -62,7 +70,7 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
             hovertext = [
                 f'Strike: ${s:.2f}<br>'
                 f'Days to Exp: {d}<br>'
-                f'IV: {iv:.2%}'
+                f'IV: {iv*100:.2f}%'
                 for s, d, iv in zip(x_data, y_data, z_data)
             ]
             
@@ -79,7 +87,7 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
         hovertext = [
             f'Strike: ${s:.2f}<br>'
             f'Days to Exp: {d}<br>'
-            f'IV: {iv:.2%}<br>'
+            f'IV: {iv*100:.2f}%<br>'
             f'Volume: {v}<br>'
             f'OI: {oi}'
             for s, d, iv, v, oi in zip(
@@ -91,13 +99,16 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
             )
         ]
     
+    # Convert IV from decimal to percentage for display (0.25 -> 25)
+    z_data_display = z_data * 100 if hasattr(z_data, '__iter__') else z_data * 100
+    
     # Create the 3D surface plot
     fig = go.Figure(data=[
         go.Mesh3d(
             x=x_data,
             y=y_data,
-            z=z_data,
-            intensity=z_data,
+            z=z_data_display,
+            intensity=z_data_display,
             colorscale='Viridis',
             opacity=0.8,
             name='Vol Surface',
