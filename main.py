@@ -41,6 +41,11 @@ def main():
         default=".",
         help="Directory to save the output HTML file. Default is the current directory."
     )
+    parser.add_argument(
+        "--smooth",
+        action="store_true",
+        help="Apply interpolation smoothing to the volatility surface."
+    )
 
     args = parser.parse_args()
 
@@ -87,7 +92,7 @@ def main():
     print(f"Prepared {len(cleaned_options_df)} option contracts for visualization.")
 
     # 4. Create volatility surface plot
-    fig = create_vol_surface(cleaned_options_df, args.ticker, args.option_type)
+    fig = create_vol_surface(cleaned_options_df, args.ticker, args.option_type, smooth=args.smooth)
 
     # 5. Save the plot
     # Ensure output directory exists

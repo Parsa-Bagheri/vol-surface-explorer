@@ -11,5 +11,6 @@ dependencies:
   - matplotlib
   - jupyter
   - plotly
+  - scipy
   - python = 3.13
   # Add other dependencies as needed
