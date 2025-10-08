@@ -20,20 +20,20 @@ def main():
     parser.add_argument(
         "--strike_min_pct", 
         type=float, 
-        default=0.90, 
-        help="Minimum strike price as a percentage of the current stock price (e.g., 0.9 for -10%%). Default is 0.90."
+        default=0.93, 
+        help="Minimum strike price as a percentage of the current stock price. Default is 0.93."
     )
     parser.add_argument(
         "--strike_max_pct", 
         type=float, 
-        default=1.10, 
-        help="Maximum strike price as a percentage of the current stock price (e.g., 1.1 for +10%%). Default is 1.10."
+        default=1.07, 
+        help="Maximum strike price as a percentage of the current stock price. Default is 1.07."
     )
     parser.add_argument(
         "--dte_max", 
         type=int, 
-        default=90, 
-        help="Maximum days to expiration for options to include. Default is 90 days."
+        default=60, 
+        help="Maximum days to expiration for options to include. Default is 60 days."
     )
     parser.add_argument(
         "--output_dir",
@@ -45,6 +45,25 @@ def main():
         "--smooth",
         action="store_true",
         help="Apply interpolation smoothing to the volatility surface."
+    )
+    parser.add_argument(
+        "--iv_source",
+        type=str,
+        default="yfinance",
+        choices=["yfinance", "black-scholes"],
+        help="Choose 'black-scholes' to recompute implied volatility via the Black-Scholes model."
+    )
+    parser.add_argument(
+        "--risk_free_rate",
+        type=float,
+        default=0.02,
+        help="Annualized risk-free rate to use when computing Black-Scholes implied volatility."
+    )
+    parser.add_argument(
+        "--dividend_yield",
+        type=float,
+        default=0.0,
+        help="Continuous dividend yield assumption for Black-Scholes implied volatility calculation."
     )
 
     args = parser.parse_args()
@@ -65,6 +84,7 @@ def main():
     print(f"Target strike range: ${min_strike_abs:.2f} to ${max_strike_abs:.2f}")
     print(f"Max DTE: {args.dte_max} days")
     print(f"Option type: {args.option_type}")
+    print(f"IV source: {args.iv_source}")
 
     # 2. Fetch options data (broadly first, then filter in cleaning)
     raw_options_df = get_options_data(args.ticker) # Fetches all available options
@@ -81,7 +101,11 @@ def main():
         min_strike=min_strike_abs,
         max_strike=max_strike_abs,
         max_dte=args.dte_max,
-        option_type_to_plot=args.option_type 
+        option_type_to_plot=args.option_type,
+        iv_source=args.iv_source,
+        underlying_price=current_price,
+        risk_free_rate=args.risk_free_rate,
+        dividend_yield=args.dividend_yield
     )
 
     if cleaned_options_df.empty:

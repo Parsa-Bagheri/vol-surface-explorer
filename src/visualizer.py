@@ -50,6 +50,10 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
         print("No data to plot")
         return
     
+    iv_method = None
+    if 'ivComputationMethod' in df.columns and not df.empty:
+        iv_method = df['ivComputationMethod'].iloc[0]
+
     # Filter data based on option type
     if option_type in ['call', 'put']:
         df = df[df['optionType'] == option_type]
@@ -67,12 +71,16 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
             z_data = z_data[mask]
             
             # Create hover text for smoothed data (without volume/OI info)
-            hovertext = [
-                f'Strike: ${s:.2f}<br>'
-                f'Days to Exp: {d}<br>'
-                f'IV: {iv*100:.2f}%'
-                for s, d, iv in zip(x_data, y_data, z_data)
-            ]
+            hovertext = []
+            for s, d, iv in zip(x_data, y_data, z_data):
+                text = (
+                    f'Strike: ${s:.2f}<br>'
+                    f'Days to Exp: {d}<br>'
+                    f'IV: {iv*100:.2f}%'
+                )
+                if iv_method:
+                    text += f'<br>IV Source: {iv_method}'
+                hovertext.append(text)
             
             print(f"Smoothing successful: {len(x_data)} interpolated points")
         except Exception as e:
@@ -84,20 +92,24 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
         x_data = df['strike']
         y_data = df['days_to_expiration']
         z_data = df['impliedVolatility']
-        hovertext = [
-            f'Strike: ${s:.2f}<br>'
-            f'Days to Exp: {d}<br>'
-            f'IV: {iv*100:.2f}%<br>'
-            f'Volume: {v}<br>'
-            f'OI: {oi}'
-            for s, d, iv, v, oi in zip(
-                df['strike'],
-                df['days_to_expiration'],
-                df['impliedVolatility'],
-                df['volume'],
-                df['openInterest']
+        hovertext = []
+        for s, d, iv, v, oi in zip(
+            df['strike'],
+            df['days_to_expiration'],
+            df['impliedVolatility'],
+            df['volume'],
+            df['openInterest']
+        ):
+            text = (
+                f'Strike: ${s:.2f}<br>'
+                f'Days to Exp: {d}<br>'
+                f'IV: {iv*100:.2f}%<br>'
+                f'Volume: {v}<br>'
+                f'OI: {oi}'
             )
-        ]
+            if iv_method:
+                text += f'<br>IV Source: {iv_method}'
+            hovertext.append(text)
     
     # Convert IV from decimal to percentage for display (0.25 -> 25)
     z_data_display = z_data * 100 if hasattr(z_data, '__iter__') else z_data * 100
@@ -119,8 +131,10 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
     ])
 
     # Update the layout
+    iv_method_suffix = f" | IV Source: {iv_method}" if iv_method else ""
+
     fig.update_layout(
-        title=f'{ticker} {option_type.capitalize() if option_type != "both" else "Call and Put"} Option Volatility Surface',
+        title=f'{ticker} {option_type.capitalize() if option_type != "both" else "Call and Put"} Option Volatility Surface{iv_method_suffix}',
         scene=dict(
             xaxis_title='Strike Price',
             yaxis_title='Days to Expiration',
