@@ -150,27 +150,4 @@ def create_vol_surface(df: pd.DataFrame, ticker: str, option_type: str = "both",
 
     return fig
 
-# Test the function
-if __name__ == "__main__":
-    # This test assumes you have a 'cleaned_options_data.csv' file from data_cleaner.py
-    # or you can load and clean data here directly for a self-contained test.
-    try:
-        cleaned_data = pd.read_csv("cleaned_options_data.csv")
-        if not cleaned_data.empty:
-            # Ensure 'optionType' column exists for the title, or provide a default
-            option_type_for_title = cleaned_data['optionType'].iloc[0] if 'optionType' in cleaned_data.columns and not cleaned_data.empty else "both"
-            
-            # For testing, let's assume a ticker and use the first option type found or 'both'
-            test_ticker = "SPY" # Example ticker
-            
-            fig = create_vol_surface(cleaned_data, test_ticker, option_type_for_title)
-            fig.write_html("volatility_surface.html")
-            print(f"Volatility surface plot saved to volatility_surface.html for {test_ticker}")
-        else:
-            print("Cleaned data is empty, skipping plot generation.")
-    except FileNotFoundError:
-        print("cleaned_options_data.csv not found. Run data_cleaner.py to generate it.")
-    except Exception as e:
-        print(f"An error occurred during visualizer test: {e}")
-
 
