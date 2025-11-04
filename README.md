@@ -6,8 +6,8 @@ Constructing and analyzing IV surfaces for equity options
 - Fetch options data from Yahoo Finance
 - Clean and filter options by strike price, expiration date, and option type
 - Visualize implied volatility surfaces in interactive 3D plots
-- **NEW**: Surface smoothing via interpolation for better visualization of illiquid data
-- **NEW**: Recompute implied volatility with the Black-Scholes model on demand
+- Surface smoothing via interpolation for better visualization of illiquid data
+- Recompute implied volatility with the Black-Scholes model on demand
 
 ## Usage
 
@@ -59,11 +59,5 @@ The `--smooth` flag enables linear interpolation of implied volatility values ac
 - Better identify patterns in illiquid strikes
 - Create more visually appealing surfaces
 
-The smoothing gracefully falls back to raw data if interpolation fails (e.g., insufficient data points).
-
-## For AI Coding Assistants
-
-This project includes specific guidance for AI tools in `.github/copilot-instructions.md`.
-GitHub Copilot users: This is automatically loaded.
-Other tools: See the instructions file for project-specific patterns.
+The smoothing falls back to raw data if interpolation fails (e.g., insufficient data points).
 
