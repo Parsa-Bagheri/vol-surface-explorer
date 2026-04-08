@@ -47,9 +47,3 @@ The `--smooth` flag enables linear interpolation of implied volatility values ac
 
 The smoothing gracefully falls back to raw data if interpolation fails (e.g., insufficient data points).
 
-## For AI Coding Assistants
-
-This project includes specific guidance for AI tools in `.github/copilot-instructions.md`.
-GitHub Copilot users: This is automatically loaded.
-Other tools: See the instructions file for project-specific patterns.
-
