@@ -172,3 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Local editor settings
+.vscode/
+
+# Generated volatility surface exports
+*_vol_surface_*.html

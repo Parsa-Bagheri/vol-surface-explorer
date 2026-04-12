@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Volatility Surface Explorer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <div class="page-shell">
+    <aside class="control-panel">
+      <div class="brand-block">
+        <p class="eyebrow">Unified Arbitrage-Free Surface</p>
+        <h1>Volatility Surface Explorer</h1>
+        <p class="subtitle">Lightweight web UI for the existing pricing and arbitrage-cleaning pipeline.</p>
+      </div>
+
+      <form method="get" action="/" class="control-form">
+        <label class="field-group">
+          <span>Ticker</span>
+          <input type="text" name="ticker" value="{{ values.ticker }}" placeholder="AAPL" maxlength="12" autocomplete="off">
+        </label>
+
+        <div class="field-group">
+          <div class="field-heading">
+            <span>Strike Range</span>
+            <strong><span id="strike-min-output">{{ values.strike_min_pct }}</span>% to <span id="strike-max-output">{{ values.strike_max_pct }}</span>%</strong>
+          </div>
+          <input type="range" id="strike-min" name="strike_min_pct" min="50" max="100" step="1" value="{{ values.strike_min_pct }}">
+          <input type="range" id="strike-max" name="strike_max_pct" min="100" max="150" step="1" value="{{ values.strike_max_pct }}">
+        </div>
+
+        <div class="field-group">
+          <div class="field-heading">
+            <span>DTE Range</span>
+            <strong><span id="dte-min-output">{{ values.dte_min }}</span> to <span id="dte-max-output">{{ values.dte_max }}</span> days</strong>
+          </div>
+          <input type="range" id="dte-min" name="dte_min" min="1" max="180" step="1" value="{{ values.dte_min }}">
+          <input type="range" id="dte-max" name="dte_max" min="1" max="365" step="1" value="{{ values.dte_max }}">
+        </div>
+
+        <label class="field-group">
+          <span>IV Source</span>
+          <select name="iv_source">
+            <option value="black-scholes" {% if values.iv_source == 'black-scholes' %}selected{% endif %}>Black-Scholes recomputed IV</option>
+            <option value="yfinance" {% if values.iv_source == 'yfinance' %}selected{% endif %}>Yahoo Finance provider IV</option>
+          </select>
+        </label>
+
+        <label class="toggle-row">
+          <input type="checkbox" name="smooth" value="1" {% if values.smooth %}checked{% endif %}>
+          <span>Show smoothed arbitrage-free surface</span>
+        </label>
+
+        <button type="submit" class="primary-button">Build Surface</button>
+      </form>
+
+      <div class="notes-card">
+        <h2>Method</h2>
+        <p>The app fits one unified surface, not separate call and put surfaces. It prefers OTM puts below the forward and OTM calls above the forward, then enforces discrete static no-arbitrage.</p>
+      </div>
+    </aside>
+
+    <main class="content-panel">
+      {% if error_message %}
+        <section class="message-card error-card">
+          <h2>Couldn’t build the surface</h2>
+          <p>{{ error_message }}</p>
+        </section>
+      {% endif %}
+
+      {% if cards %}
+        <section class="card-grid">
+          {% for card in cards %}
+            <article class="metric-card">
+              <p>{{ card.label }}</p>
+              <strong>{{ card.value }}</strong>
+            </article>
+          {% endfor %}
+        </section>
+      {% endif %}
+
+      {% if plot_html %}
+        <section class="surface-card">
+          <div class="surface-header">
+            <div>
+              <p class="eyebrow">Interactive Plot</p>
+              <h2>{{ values.ticker }} surface</h2>
+            </div>
+            <p class="surface-meta">Source: {{ values.iv_source }}</p>
+          </div>
+          <div class="plot-wrapper">{{ plot_html|safe }}</div>
+        </section>
+      {% elif not error_message %}
+        <section class="message-card empty-card">
+          <h2>Ready when you are</h2>
+          <p>Enter a ticker, adjust the strike and DTE sliders, and build a surface.</p>
+        </section>
+      {% endif %}
+
+      {% if diagnostics %}
+        <section class="diagnostics-grid">
+          <article class="diagnostics-card">
+            <h2>Quality Summary</h2>
+            <ul>
+              <li>Retained rows: {{ diagnostics.rows_retained }}</li>
+              <li>Surface rows: {{ diagnostics.rows_surface_included }}</li>
+              <li>Excluded rows: {{ diagnostics.rows_surface_excluded }}</li>
+              <li>Fallback IV share: {{ '%.1f'|format(100 * diagnostics.fallback_iv_fraction) }}%</li>
+            </ul>
+          </article>
+          <article class="diagnostics-card">
+            <h2>Flag Counts</h2>
+            <ul>
+              {% for flag, count in diagnostics.flag_counts|dictsort %}
+                <li>{{ flag }}: {{ count }}</li>
+              {% else %}
+                <li>No flags recorded.</li>
+              {% endfor %}
+            </ul>
+          </article>
+        </section>
+      {% endif %}
+    </main>
+  </div>
+
+  <script>
+    const pairs = [
+      { minId: 'strike-min', maxId: 'strike-max', minOutputId: 'strike-min-output', maxOutputId: 'strike-max-output' },
+      { minId: 'dte-min', maxId: 'dte-max', minOutputId: 'dte-min-output', maxOutputId: 'dte-max-output' },
+    ];
+
+    for (const pair of pairs) {
+      const minInput = document.getElementById(pair.minId);
+      const maxInput = document.getElementById(pair.maxId);
+      const minOutput = document.getElementById(pair.minOutputId);
+      const maxOutput = document.getElementById(pair.maxOutputId);
+
+      const syncValues = (source) => {
+        let minValue = Number(minInput.value);
+        let maxValue = Number(maxInput.value);
+        if (minValue > maxValue) {
+          if (source === minInput) {
+            maxValue = minValue;
+            maxInput.value = String(maxValue);
+          } else {
+            minValue = maxValue;
+            minInput.value = String(minValue);
+          }
+        }
+        minOutput.textContent = String(minValue);
+        maxOutput.textContent = String(maxValue);
+      };
+
+      minInput.addEventListener('input', () => syncValues(minInput));
+      maxInput.addEventListener('input', () => syncValues(maxInput));
+      syncValues(minInput);
+    }
+  </script>
+</body>
+</html>
