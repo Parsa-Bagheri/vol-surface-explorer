@@ -1,6 +1,9 @@
 # vol-surface-project
 Constructing and analyzing IV surfaces for equity options.
 
+## Example Visualization
+<img width="1648" height="946" alt="image" src="https://github.com/user-attachments/assets/e59339d1-bce1-4f2b-9c3b-346043db84b6" />
+
 ## Features
 - Fetch options data from Yahoo Finance with per-expiration snapshot metadata.
 - Compute IV using:
