@@ -2,7 +2,7 @@
 Constructing and analyzing IV surfaces for equity options.
 
 ## Example Visualization
-<img width="1648" height="946" alt="image" src="https://github.com/user-attachments/assets/e59339d1-bce1-4f2b-9c3b-346043db84b6" />
+<img width="1865" height="983" alt="image" src="https://github.com/user-attachments/assets/f427e8f6-4cf4-49c9-8f57-0bd7ff08668b" />
 
 ## Features
 - Fetch options data from Yahoo Finance with per-expiration snapshot metadata.
