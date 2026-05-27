@@ -27,13 +27,9 @@ Surface builds can take time because option chains are fetched live. A strong lo
 
 Show the latest option trade timestamp and fetch timestamp in `Advanced info`. This would make data freshness easier to judge without adding clutter to the primary view.
 
-### Add A Provider Warning Only In `yfinance` Mode
+### Make Smoothing Sticky
 
-When the user explicitly selects Yahoo IV, show a compact note in `Advanced info` with provider-IV uniqueness and placeholder counts. This keeps the default view clean while making provider-mode caveats discoverable.
-
-### Make The Surface Mode Sticky
-
-Persist the last selected IV source and smoothing mode in local storage. Users comparing tickers would not need to reset the same preferred mode each time.
+Persist the smoothing preference in local storage. Users comparing tickers would not need to reset the same display preference each time.
 
 ### Add Keyboard-Friendly Range Editing
 

@@ -5,6 +5,47 @@ import pandas as pd
 import src.data_fetch as data_fetch
 
 
+def test_get_current_price_falls_back_when_one_day_history_is_empty(monkeypatch):
+    class FakeTicker:
+        fast_info = {}
+        info = {}
+
+        def history(self, period):
+            if period == "1d":
+                return pd.DataFrame(columns=["Close"])
+            return pd.DataFrame({"Close": [99.0, 101.25]})
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", lambda ticker: FakeTicker())
+
+    assert data_fetch.get_current_price("SPY") == 101.25
+
+
+def test_get_current_price_uses_info_when_history_is_unavailable(monkeypatch):
+    class FakeTicker:
+        fast_info = {}
+        info = {"regularMarketPrice": 432.10}
+
+        def history(self, period):
+            raise RuntimeError("history unavailable")
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", lambda ticker: FakeTicker())
+
+    assert data_fetch.get_current_price("SPY") == 432.10
+
+
+def test_get_current_price_returns_none_when_all_sources_are_unavailable(monkeypatch):
+    class FakeTicker:
+        fast_info = None
+        info = None
+
+        def history(self, period):
+            return pd.DataFrame(columns=["Close"])
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", lambda ticker: FakeTicker())
+
+    assert data_fetch.get_current_price("SPY") is None
+
+
 def _fake_chain(expiration):
     calls = pd.DataFrame(
         [

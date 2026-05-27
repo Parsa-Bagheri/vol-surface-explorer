@@ -35,8 +35,7 @@ body {
 }
 
 button,
-input,
-select {
+input {
   font: inherit;
 }
 
@@ -71,8 +70,8 @@ h1 {
 
 .control-form {
   display: grid;
-  grid-template-columns: minmax(150px, 0.7fr) minmax(280px, 1.25fr) minmax(280px, 1.25fr) minmax(150px, 0.7fr) auto auto;
-  grid-template-areas: "ticker strike dte source smooth submit";
+  grid-template-columns: minmax(150px, 0.7fr) minmax(280px, 1.25fr) minmax(280px, 1.25fr) auto auto;
+  grid-template-areas: "ticker strike dte smooth submit";
   gap: 12px;
   align-items: end;
   padding: 14px;
@@ -97,10 +96,6 @@ h1 {
 
 .control-form .range-control:nth-of-type(2) {
   grid-area: dte;
-}
-
-.compact-field {
-  grid-area: source;
 }
 
 .toggle-row {
@@ -131,7 +126,6 @@ h1 {
 }
 
 input[type="text"],
-select,
 .range-number {
   width: 100%;
   min-height: 42px;
@@ -142,12 +136,7 @@ select,
   padding: 10px 12px;
 }
 
-select {
-  cursor: pointer;
-}
-
 input[type="text"]:focus,
-select:focus,
 .range-number:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -590,14 +579,13 @@ body.is-loading .error-card {
   .control-form {
     grid-template-columns: minmax(0, 1fr) minmax(260px, 0.95fr);
     grid-template-areas:
-      "ticker source"
+      "ticker smooth"
       "dte smooth"
       "strike submit";
     align-items: stretch;
   }
 
   .ticker-field,
-  .compact-field,
   .toggle-row,
   .primary-button {
     min-width: 0;
@@ -623,7 +611,6 @@ body.is-loading .error-card {
       "ticker"
       "dte"
       "strike"
-      "source"
       "smooth"
       "submit";
   }

@@ -9,6 +9,7 @@ from src.data_cleaner import (
     _implied_volatility,
     _no_arbitrage_bounds,
     build_diagnostics_report,
+    build_internal_validation_report,
     prepare_options_data,
 )
 from src.data_fetch import _expiration_dte
@@ -83,7 +84,6 @@ def test_prepare_options_data_black_scholes_iv():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="black-scholes",
         underlying_price=spot_price,
         risk_free_rate=risk_free_rate,
     )
@@ -91,7 +91,7 @@ def test_prepare_options_data_black_scholes_iv():
     assert not cleaned_df.empty
     computed_iv = cleaned_df["impliedVolatilityFinal"].iloc[0]
     assert abs(computed_iv - true_volatility) < 5e-3
-    assert cleaned_df["ivComputationMethod"].iloc[0] == "black-scholes"
+    assert abs(cleaned_df["blackScholesImpliedVolatility"].iloc[0] - true_volatility) < 5e-3
     assert bool(cleaned_df["includeInSurface"].iloc[0]) is True
 
 
@@ -173,7 +173,7 @@ def test_zero_volatility_limit_returns_lower_bound_and_inverts_to_zero():
     assert implied_volatility == 0.0
 
 
-def test_auto_falls_back_from_placeholder_provider_iv():
+def test_raw_iv_field_is_ignored_when_quote_iv_is_available():
     spot_price = 100.0
     true_volatility = 0.22
     days_to_expiration = 30
@@ -193,20 +193,17 @@ def test_auto_falls_back_from_placeholder_provider_iv():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
 
     assert len(cleaned_df) == 1
     row = cleaned_df.iloc[0]
-    assert row["ivSourceUsed"] == "black-scholes"
     assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
-    assert "placeholder_iv" in row["qualityFlags"]
     assert bool(row["includeInSurface"]) is True
 
 
-def test_black_scholes_mode_excludes_unreliable_wide_midpoint_iv():
+def test_black_scholes_excludes_unreliable_wide_midpoint_iv():
     spot_price = 100.0
     recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
     raw_df = pd.DataFrame(
@@ -226,7 +223,6 @@ def test_black_scholes_mode_excludes_unreliable_wide_midpoint_iv():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="black-scholes",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
@@ -238,11 +234,10 @@ def test_black_scholes_mode_excludes_unreliable_wide_midpoint_iv():
     assert "wide_iv_bid_ask" in row["qualityFlags"]
     assert "recomputed_iv_unreliable" in row["qualityFlags"]
     assert pd.isna(row["impliedVolatilityFinal"])
-    assert row["ivSourceUsed"] == "none"
     assert bool(row["includeInSurface"]) is False
 
 
-def test_black_scholes_mode_excludes_recent_trade_inside_wide_quote():
+def test_black_scholes_excludes_recent_trade_inside_wide_quote():
     spot_price = 100.0
     last_price = 2.50
     raw_df = pd.DataFrame(
@@ -261,7 +256,6 @@ def test_black_scholes_mode_excludes_recent_trade_inside_wide_quote():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="black-scholes",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
@@ -277,14 +271,14 @@ def test_black_scholes_mode_excludes_recent_trade_inside_wide_quote():
     assert bool(row["includeInSurface"]) is False
 
 
-def test_auto_keeps_valid_provider_iv_when_midpoint_recompute_is_unreliable():
+def test_unreliable_quote_iv_is_not_filled_from_raw_iv_field():
     spot_price = 100.0
-    provider_iv = 0.35
+    ignored_raw_iv = 0.35
     stale_trade = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
     raw_df = pd.DataFrame(
         [
             _base_row(
-                impliedVolatility=provider_iv,
+                impliedVolatility=ignored_raw_iv,
                 bid=0.25,
                 ask=8.00,
                 lastPrice=4.00,
@@ -298,23 +292,21 @@ def test_auto_keeps_valid_provider_iv_when_midpoint_recompute_is_unreliable():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
 
     assert len(cleaned_df) == 1
     row = cleaned_df.iloc[0]
-    assert row["ivSourceUsed"] == "yfinance"
-    assert row["impliedVolatilityFinal"] == provider_iv
+    assert pd.isna(row["impliedVolatilityFinal"])
     assert "wide_recompute_spread" in row["qualityFlags"]
     assert "wide_iv_bid_ask" in row["qualityFlags"]
-    assert "provider_used_without_quote_sanity" in row["qualityFlags"]
+    assert "recomputed_iv_unreliable" in row["qualityFlags"]
     assert row["confidenceLevel"] == "low"
     assert bool(row["includeInSurface"]) is False
 
 
-def test_black_scholes_mode_keeps_last_price_iv_when_quote_support_is_missing():
+def test_black_scholes_keeps_last_price_iv_when_quote_support_is_missing():
     spot_price = 100.0
     true_volatility = 0.24
     days_to_expiration = 30
@@ -340,7 +332,6 @@ def test_black_scholes_mode_keeps_last_price_iv_when_quote_support_is_missing():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="black-scholes",
         underlying_price=spot_price,
         quality_mode="lenient",
         max_trade_age_hours=72.0,
@@ -348,7 +339,6 @@ def test_black_scholes_mode_keeps_last_price_iv_when_quote_support_is_missing():
 
     assert len(cleaned_df) == 1
     row = cleaned_df.iloc[0]
-    assert row["ivSourceUsed"] == "black-scholes"
     assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
     assert row["confidenceLevel"] == "medium"
     assert bool(row["includeInSurface"]) is True
@@ -373,7 +363,6 @@ def test_arbitrage_violation_flagged_and_excluded():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
@@ -385,7 +374,7 @@ def test_arbitrage_violation_flagged_and_excluded():
     assert pd.isna(row["impliedVolatilityFinal"])
 
 
-def test_lenient_auto_prefers_recomputed_iv_with_missing_quotes_when_last_price_is_usable():
+def test_lenient_quality_keeps_recomputed_iv_with_missing_quotes_when_last_price_is_usable():
     spot_price = 100.0
     true_volatility = 0.24
     days_to_expiration = 30
@@ -394,11 +383,11 @@ def test_lenient_auto_prefers_recomputed_iv_with_missing_quotes_when_last_price_
         spot_price, 100.0, t, 0.02, true_volatility
     )
     recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
-    provider_iv = 0.28
+    ignored_raw_iv = 0.28
     raw_df = pd.DataFrame(
         [
             _base_row(
-                impliedVolatility=provider_iv,
+                impliedVolatility=ignored_raw_iv,
                 bid=0.0,
                 ask=0.0,
                 lastPrice=market_price,
@@ -410,7 +399,6 @@ def test_lenient_auto_prefers_recomputed_iv_with_missing_quotes_when_last_price_
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         quality_mode="lenient",
         max_trade_age_hours=72.0,
@@ -418,7 +406,6 @@ def test_lenient_auto_prefers_recomputed_iv_with_missing_quotes_when_last_price_
 
     assert len(cleaned_df) == 1
     row = cleaned_df.iloc[0]
-    assert row["ivSourceUsed"] == "black-scholes"
     assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
     assert row["confidenceLevel"] == "medium"
     assert bool(row["includeInSurface"]) is True
@@ -427,7 +414,7 @@ def test_lenient_auto_prefers_recomputed_iv_with_missing_quotes_when_last_price_
     assert "recomputed_iv_low_quote_support" in row["qualityFlags"]
 
 
-def test_black_scholes_mode_excludes_stale_last_price_when_quote_support_is_missing():
+def test_black_scholes_excludes_stale_last_price_when_quote_support_is_missing():
     spot_price = 100.0
     true_volatility = 0.24
     days_to_expiration = 30
@@ -453,7 +440,6 @@ def test_black_scholes_mode_excludes_stale_last_price_when_quote_support_is_miss
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="black-scholes",
         underlying_price=spot_price,
         quality_mode="lenient",
         max_trade_age_hours=72.0,
@@ -462,7 +448,6 @@ def test_black_scholes_mode_excludes_stale_last_price_when_quote_support_is_miss
     assert len(cleaned_df) == 1
     row = cleaned_df.iloc[0]
     assert np.isfinite(row["blackScholesImpliedVolatility"])
-    assert row["ivSourceUsed"] == "none"
     assert pd.isna(row["impliedVolatilityFinal"])
     assert bool(row["includeInSurface"]) is False
     assert "stale_last_trade" in row["qualityFlags"]
@@ -478,7 +463,6 @@ def test_nan_open_interest_is_flagged_deterministically():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
@@ -498,7 +482,6 @@ def test_zero_volume_and_zero_open_interest_are_excluded_from_surface():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
@@ -525,7 +508,6 @@ def test_min_dte_filter_removes_short_dated_contracts():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         min_dte=20,
         max_dte=60,
@@ -540,34 +522,6 @@ def test_expiration_dte_uses_new_york_close_during_daylight_saving_time():
     as_of = pd.Timestamp("2026-05-15 20:30:00", tz="UTC")
 
     assert _expiration_dte("2026-05-15", as_of) == 0
-
-
-def test_yfinance_mode_does_not_attach_recompute_specific_iv():
-    spot_price = 100.0
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=0.31,
-                bid=0.25,
-                ask=8.00,
-                lastPrice=4.00,
-            )
-        ]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        iv_source="yfinance",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-
-    row = cleaned_df.iloc[0]
-    assert row["ivSourceUsed"] == "yfinance"
-    assert pd.isna(row["blackScholesImpliedVolatility"])
-    assert "wide_recompute_spread" not in row["qualityFlags"]
-    assert "wide_iv_bid_ask" not in row["qualityFlags"]
 
 
 def test_diagnostics_report_counts_flags_and_exclusions():
@@ -590,7 +544,6 @@ def test_diagnostics_report_counts_flags_and_exclusions():
     cleaned_df = prepare_options_data(
         raw_df,
         option_type_to_plot="call",
-        iv_source="auto",
         underlying_price=spot_price,
         quality_mode="lenient",
     )
@@ -598,5 +551,27 @@ def test_diagnostics_report_counts_flags_and_exclusions():
 
     assert report["rows_retained"] == 2
     assert report["rows_surface_excluded"] >= 1
-    assert "placeholder_iv" in report["flag_counts"]
+    assert "iv_unavailable" in report["flag_counts"]
     assert report["raw_row_count"] == 2
+
+
+def test_internal_validation_tolerates_missing_market_price_column():
+    validation_df = pd.DataFrame(
+        [
+            {
+                "optionType": "call",
+                "strike": 100.0,
+                "time_to_expiration_years": 30.0 / 365.25,
+                "impliedVolatilityFinal": 0.22,
+            }
+        ]
+    )
+
+    report = build_internal_validation_report(
+        validation_df,
+        underlying_price=100.0,
+    )
+
+    assert report["rows_checked"] == 1
+    assert report["rows_with_market_price"] == 0
+    assert report["repricing_mae"] is None

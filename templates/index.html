@@ -53,15 +53,6 @@
         </div>
       </section>
 
-      <label class="field-group compact-field">
-        <span>IV Source</span>
-        <select name="iv_source">
-          <option value="auto" {% if values.iv_source == 'auto' %}selected{% endif %}>Auto IV</option>
-          <option value="black-scholes" {% if values.iv_source == 'black-scholes' %}selected{% endif %}>Black-Scholes</option>
-          <option value="yfinance" {% if values.iv_source == 'yfinance' %}selected{% endif %}>Yahoo IV</option>
-        </select>
-      </label>
-
       <label class="toggle-row">
         <input type="hidden" name="smooth" value="0">
         <input type="checkbox" name="smooth" value="1" {% if values.smooth %}checked{% endif %}>
@@ -127,7 +118,7 @@
         <details class="advanced-panel">
           <summary>
             <span>Advanced info</span>
-            <small>rows, sources, quality flags</small>
+            <small>rows and quality flags</small>
           </summary>
 
           <div class="advanced-content">
@@ -149,7 +140,6 @@
                   <li>Retained rows: {{ diagnostics.rows_retained }}</li>
                   <li>Surface rows: {{ diagnostics.rows_surface_included }}</li>
                   <li>Excluded rows: {{ diagnostics.rows_surface_excluded }}</li>
-                  <li>Quote-derived IV share: {{ '%.1f'|format(100 * (diagnostics.black_scholes_iv_fraction|default(0))) }}%</li>
                 </ul>
               </article>
               <article class="diagnostics-panel">

@@ -18,9 +18,6 @@ def _build_result(request: SurfaceRequest) -> SurfaceBuildResult:
         "rows_surface_excluded": 4,
         "surface_dte_min": 14,
         "surface_dte_max": 68,
-        "black_scholes_iv_fraction": 0.25,
-        "provider_iv_fraction": 0.75,
-        "fallback_iv_fraction": 0.25,
         "flag_counts": {"low_volume": 2},
         "internal_validation": {"repricing_mae": 0.1234},
     }
@@ -63,7 +60,7 @@ def test_index_builds_surface_from_query_params():
     client = app.test_client()
 
     response = client.get(
-        "/?ticker=tsla&strike_min_pct=85&strike_max_pct=120&dte_min=14&dte_max=90&iv_source=yfinance&smooth=1"
+        "/?ticker=tsla&strike_min_pct=85&strike_max_pct=120&dte_min=14&dte_max=90&smooth=1"
     )
 
     assert response.status_code == 200
@@ -81,11 +78,10 @@ def test_index_builds_surface_from_query_params():
     assert captured["request"].strike_max_pct == 1.2
     assert captured["request"].dte_min == 14
     assert captured["request"].dte_max == 90
-    assert captured["request"].iv_source == "yfinance"
     assert captured["request"].smooth is True
 
 
-def test_index_uses_auto_iv_source_by_default():
+def test_index_has_no_iv_source_selector():
     captured = {}
 
     def fake_builder(request: SurfaceRequest) -> SurfaceBuildResult:
@@ -99,8 +95,8 @@ def test_index_uses_auto_iv_source_by_default():
 
     assert response.status_code == 200
     assert captured["request"].ticker == "SPY"
-    assert captured["request"].iv_source == "auto"
-    assert b"value=\"auto\" selected" in response.data
+    assert b'name="iv_source"' not in response.data
+    assert b"IV Source" not in response.data
 
 
 def test_index_accepts_editable_range_values_across_full_bounds():
@@ -136,7 +132,7 @@ def test_index_allows_smoothed_mode_to_be_disabled_from_form_submission():
 
     response = client.get(
         "/?ticker=spy&strike_min_pct=93&strike_max_pct=107&dte_min=7&dte_max=60"
-        "&iv_source=yfinance&smooth=0"
+        "&smooth=0"
     )
 
     assert response.status_code == 200
@@ -156,7 +152,7 @@ def test_index_keeps_checked_smoothed_mode_when_hidden_fallback_is_submitted():
 
     response = client.get(
         "/?ticker=spy&strike_min_pct=93&strike_max_pct=107&dte_min=7&dte_max=60"
-        "&iv_source=yfinance&smooth=0&smooth=1"
+        "&smooth=0&smooth=1"
     )
 
     assert response.status_code == 200

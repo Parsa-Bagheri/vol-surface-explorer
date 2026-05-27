@@ -14,7 +14,6 @@ DEFAULT_FORM_VALUES = {
     "strike_max_pct": 107,
     "dte_min": 7,
     "dte_max": 60,
-    "iv_source": "auto",
     "smooth": True,
 }
 
@@ -65,9 +64,6 @@ def _parse_bool_arg(name: str, default: bool) -> bool:
 
 def _form_values() -> Dict[str, Any]:
     ticker = (request.args.get("ticker") or DEFAULT_FORM_VALUES["ticker"]).strip().upper()
-    iv_source = (request.args.get("iv_source") or DEFAULT_FORM_VALUES["iv_source"]).strip().lower()
-    if iv_source not in {"auto", "yfinance", "black-scholes"}:
-        iv_source = str(DEFAULT_FORM_VALUES["iv_source"])
 
     return {
         "ticker": ticker,
@@ -79,7 +75,6 @@ def _form_values() -> Dict[str, Any]:
         ),
         "dte_min": _parse_int_arg("dte_min", int(DEFAULT_FORM_VALUES["dte_min"]), 1, 365),
         "dte_max": _parse_int_arg("dte_max", int(DEFAULT_FORM_VALUES["dte_max"]), 1, 365),
-        "iv_source": iv_source,
         "smooth": _parse_bool_arg("smooth", bool(DEFAULT_FORM_VALUES["smooth"])),
     }
 
@@ -115,13 +110,6 @@ def _surface_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
 def _advanced_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
     diagnostics = result.diagnostics
     internal_validation = diagnostics.get("internal_validation", {})
-    quote_derived_fraction = float(
-        diagnostics.get(
-            "black_scholes_iv_fraction",
-            diagnostics.get("fallback_iv_fraction", 0.0),
-        )
-    )
-    provider_fraction = float(diagnostics.get("provider_iv_fraction", 0.0))
     return [
         {"label": "Raw Contracts", "value": f"{len(result.raw_options_df):,}"},
         {
@@ -132,14 +120,6 @@ def _advanced_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
         {
             "label": "Excluded Rows",
             "value": f"{diagnostics.get('rows_surface_excluded', 0):,}",
-        },
-        {
-            "label": "Quote-Derived IV",
-            "value": f"{100.0 * quote_derived_fraction:.1f}%",
-        },
-        {
-            "label": "Provider IV",
-            "value": f"{100.0 * provider_fraction:.1f}%",
         },
         {
             "label": "Repricing MAE",
@@ -185,7 +165,6 @@ def create_app(
                         dte_min=int(values["dte_min"]),
                         dte_max=int(values["dte_max"]),
                         smooth=bool(values["smooth"]),
-                        iv_source=str(values["iv_source"]),
                         quality_mode="lenient",
                     )
                 )
@@ -223,6 +202,13 @@ def create_app(
 app = create_app()
 
 
+def _server_port() -> int:
+    try:
+        return int(os.environ.get("PORT", "5000"))
+    except ValueError:
+        return 5000
+
+
 if __name__ == "__main__":
     debug_enabled = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
-    app.run(host="127.0.0.1", port=5000, debug=debug_enabled)
+    app.run(host="127.0.0.1", port=_server_port(), debug=debug_enabled)

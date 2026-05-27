@@ -6,8 +6,14 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy.optimize import Bounds, LinearConstraint, minimize
+from scipy.special import ndtr
 
-from src.data_cleaner import _black_scholes_price, _implied_volatility, _to_float
+from src.data_cleaner import (
+    _black_scholes_price,
+    _black_scholes_prices_array,
+    _implied_volatility,
+    _to_float,
+)
 
 
 ARBITRAGE_K_GRID_SIZE = 81
@@ -17,6 +23,56 @@ MIN_SMOOTH_SLICE_NODE_COUNT = 3
 MIN_SMOOTH_MATURITY_SLICE_COUNT = 3
 MIN_SMOOTH_SLICE_LOG_MONEYNESS_WIDTH = 0.01
 MAX_SMOOTH_DTE_GRID_POINTS = 80
+ARBITRAGE_FEASIBILITY_TOLERANCE = 1e-12
+
+
+def _black_scholes_call_prices_array(
+    spot: float,
+    strikes: np.ndarray,
+    time_to_expiration: float,
+    risk_free_rate: float,
+    volatility: np.ndarray,
+    dividend_yield: float,
+) -> np.ndarray:
+    strikes = np.asarray(strikes, dtype=float)
+    volatility = np.asarray(volatility, dtype=float)
+    prices = np.full(strikes.shape, np.nan, dtype=float)
+    if (
+        time_to_expiration <= 0
+        or spot <= 0
+        or strikes.shape != volatility.shape
+    ):
+        return prices
+
+    discounted_spot = spot * np.exp(-dividend_yield * time_to_expiration)
+    discounted_strike = strikes * np.exp(-risk_free_rate * time_to_expiration)
+    valid = np.isfinite(strikes) & (strikes > 0) & np.isfinite(volatility) & (volatility >= 0)
+    zero_volatility = valid & (volatility == 0)
+    if np.any(zero_volatility):
+        prices[zero_volatility] = np.maximum(
+            0.0,
+            discounted_spot - discounted_strike[zero_volatility],
+        )
+
+    positive_volatility = valid & (volatility > 0)
+    if np.any(positive_volatility):
+        sqrt_t = np.sqrt(time_to_expiration)
+        vol_sqrt_t = volatility[positive_volatility] * sqrt_t
+        d1 = (
+            np.log(spot / strikes[positive_volatility])
+            + (
+                risk_free_rate
+                - dividend_yield
+                + 0.5 * volatility[positive_volatility] ** 2
+            )
+            * time_to_expiration
+        ) / vol_sqrt_t
+        d2 = d1 - vol_sqrt_t
+        prices[positive_volatility] = (
+            discounted_spot * ndtr(d1)
+            - discounted_strike[positive_volatility] * ndtr(d2)
+        )
+    return prices
 
 
 def _forward_price(
@@ -68,9 +124,8 @@ def _surface_option_price(
             return float(market_price)
         return float("nan")
 
-    # The selected IV is the source-of-truth for the surface. In Black-Scholes
-    # mode this reprices back to the quote used for inversion; in provider-IV
-    # mode it preserves provider-vs-recomputed differences for comparison.
+    # The Black-Scholes IV is the source of truth for the surface, so each
+    # node is repriced through the same model used for inversion.
     return _black_scholes_price(
         option_type=option_type,
         spot=underlying_price,
@@ -99,9 +154,20 @@ def _surface_weights(df: pd.DataFrame) -> np.ndarray:
         weights = pd.to_numeric(df["surfaceWeight"], errors="coerce").fillna(0.25).to_numpy()
         return np.clip(weights.astype(float), 0.05, None)
 
-    volume = pd.to_numeric(df.get("volume"), errors="coerce").fillna(0.0).to_numpy()
-    open_interest = pd.to_numeric(df.get("openInterest"), errors="coerce").fillna(0.0).to_numpy()
-    spread = pd.to_numeric(df.get("spreadRatio"), errors="coerce").fillna(0.0).to_numpy()
+    if "volume" in df.columns:
+        volume = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0).to_numpy()
+    else:
+        volume = np.zeros(len(df), dtype=float)
+    if "openInterest" in df.columns:
+        open_interest = pd.to_numeric(
+            df["openInterest"], errors="coerce"
+        ).fillna(0.0).to_numpy()
+    else:
+        open_interest = np.zeros(len(df), dtype=float)
+    if "spreadRatio" in df.columns:
+        spread = pd.to_numeric(df["spreadRatio"], errors="coerce").fillna(0.0).to_numpy()
+    else:
+        spread = np.zeros(len(df), dtype=float)
     confidence = df.get("confidenceLevel", pd.Series(["medium"] * len(df))).astype(str).str.lower()
     confidence_multiplier = confidence.map({"high": 1.0, "medium": 0.6, "low": 0.25}).fillna(0.4)
     liquidity = 0.5 * np.clip(np.log1p(volume) / np.log1p(100.0), 0.0, 1.0) + 0.5 * np.clip(
@@ -110,6 +176,39 @@ def _surface_weights(df: pd.DataFrame) -> np.ndarray:
     spread_penalty = 1.0 / (1.0 + np.clip(spread, 0.0, None))
     weights = confidence_multiplier.to_numpy() * (0.5 + liquidity) * spread_penalty
     return np.clip(weights.astype(float), 0.05, None)
+
+
+def _call_price_slice_is_feasible(
+    strikes: np.ndarray,
+    call_prices: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    discount_factor: float,
+) -> bool:
+    tolerance = ARBITRAGE_FEASIBILITY_TOLERANCE
+    if (
+        not np.all(np.isfinite(call_prices))
+        or np.any(call_prices < lower_bounds - tolerance)
+        or np.any(call_prices > upper_bounds + tolerance)
+    ):
+        return False
+
+    strike_steps = np.diff(strikes)
+    if np.any(strike_steps <= 0):
+        return False
+
+    price_decrease = call_prices[:-1] - call_prices[1:]
+    if np.any(price_decrease < -tolerance):
+        return False
+    if np.any(price_decrease > strike_steps * discount_factor + tolerance):
+        return False
+
+    if len(strikes) >= 3:
+        slopes = np.diff(call_prices) / strike_steps
+        if np.any(np.diff(slopes) < -tolerance):
+            return False
+
+    return True
 
 
 def _project_call_price_slice(
@@ -132,6 +231,15 @@ def _project_call_price_slice(
     lower_bounds = np.maximum(0.0, discounted_spot - strikes * discount_factor)
     upper_bounds = np.full(len(strikes), discounted_spot)
     initial = np.clip(call_prices, lower_bounds, upper_bounds)
+
+    if _call_price_slice_is_feasible(
+        strikes=strikes,
+        call_prices=call_prices,
+        lower_bounds=lower_bounds,
+        upper_bounds=upper_bounds,
+        discount_factor=discount_factor,
+    ):
+        return call_prices.astype(float)
 
     constraints: List[LinearConstraint] = []
     monotone_matrix = []
@@ -203,15 +311,42 @@ def _build_surface_nodes(
     if working_df.empty:
         return pd.DataFrame()
 
-    working_df["surfaceOptionPrice"] = working_df.apply(
-        lambda row: _surface_option_price(
-            row=row,
-            underlying_price=underlying_price,
-            risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-        ),
-        axis=1,
+    option_types = working_df["optionType"].astype(str).str.lower()
+    strikes = pd.to_numeric(working_df["strike"], errors="coerce").to_numpy(dtype=float)
+    time_to_expiration = pd.to_numeric(
+        working_df["time_to_expiration_years"], errors="coerce"
+    ).to_numpy(dtype=float)
+    implied_volatility = pd.to_numeric(
+        working_df["impliedVolatilityFinal"], errors="coerce"
+    ).to_numpy(dtype=float)
+    if "dividendYieldUsed" in working_df.columns:
+        dividend_yield_used = pd.to_numeric(
+            working_df["dividendYieldUsed"], errors="coerce"
+        ).fillna(dividend_yield)
+    else:
+        dividend_yield_used = pd.Series(dividend_yield, index=working_df.index)
+    working_df["dividendYieldUsed"] = dividend_yield_used.astype(float)
+
+    surface_option_prices = _black_scholes_prices_array(
+        option_types=option_types.to_numpy(dtype=object),
+        spot=underlying_price,
+        strikes=strikes,
+        time_to_expiration=time_to_expiration,
+        risk_free_rate=risk_free_rate,
+        volatility=implied_volatility,
+        dividend_yield=working_df["dividendYieldUsed"].to_numpy(dtype=float),
     )
+    invalid_surface_price = ~np.isfinite(surface_option_prices) | (surface_option_prices <= 0)
+    if np.any(invalid_surface_price):
+        if "marketPrice" in working_df.columns:
+            market_prices = pd.to_numeric(
+                working_df["marketPrice"], errors="coerce"
+            ).to_numpy(dtype=float)
+        else:
+            market_prices = np.full(len(working_df), np.nan, dtype=float)
+        fallback_mask = invalid_surface_price & np.isfinite(market_prices) & (market_prices > 0)
+        surface_option_prices[fallback_mask] = market_prices[fallback_mask]
+    working_df["surfaceOptionPrice"] = surface_option_prices
     working_df = working_df.dropna(subset=["surfaceOptionPrice"]).copy()
     working_df = working_df[working_df["surfaceOptionPrice"] > 0]
     if working_df.empty:
@@ -225,92 +360,101 @@ def _build_surface_nodes(
         working_df["forwardPrice"] = np.nan
     missing_forward = ~np.isfinite(working_df["forwardPrice"])
     if missing_forward.any():
-        working_df.loc[missing_forward, "forwardPrice"] = working_df.loc[
-            missing_forward
-        ].apply(
-            lambda row: _forward_price(
-                spot=underlying_price,
-                time_to_expiration=float(row["time_to_expiration_years"]),
-                risk_free_rate=risk_free_rate,
-                dividend_yield=dividend_yield,
-            ),
-            axis=1,
+        fallback_forward = underlying_price * np.exp(
+            (risk_free_rate - dividend_yield)
+            * working_df.loc[missing_forward, "time_to_expiration_years"].to_numpy(dtype=float)
         )
-    if "dividendYieldUsed" in working_df.columns:
-        working_df["dividendYieldUsed"] = pd.to_numeric(
-            working_df["dividendYieldUsed"], errors="coerce"
-        )
-    else:
-        working_df["dividendYieldUsed"] = dividend_yield
-    working_df["dividendYieldUsed"] = working_df["dividendYieldUsed"].fillna(dividend_yield)
-    working_df["surfaceQuotePreferred"] = working_df.apply(
-        lambda row: _surface_quote_is_preferred(
-            option_type=str(row["optionType"]).lower(),
-            strike=float(row["strike"]),
-            forward=float(row["forwardPrice"]),
-        ),
-        axis=1,
+        working_df.loc[missing_forward, "forwardPrice"] = fallback_forward
+
+    strikes = working_df["strike"].to_numpy(dtype=float)
+    forwards = working_df["forwardPrice"].to_numpy(dtype=float)
+    option_types = working_df["optionType"].astype(str).str.lower()
+    valid_forward = np.isfinite(forwards) & (forwards > 0) & np.isfinite(strikes) & (strikes > 0)
+    log_moneyness = np.full(len(working_df), np.nan, dtype=float)
+    log_moneyness[valid_forward] = np.log(strikes[valid_forward] / forwards[valid_forward])
+    preferred = np.ones(len(working_df), dtype=bool)
+    below_forward = valid_forward & (log_moneyness < -SURFACE_ATM_LOG_MONEYNESS_BAND)
+    above_forward = valid_forward & (log_moneyness > SURFACE_ATM_LOG_MONEYNESS_BAND)
+    preferred[below_forward] = option_types.to_numpy(dtype=object)[below_forward] == "put"
+    preferred[above_forward] = option_types.to_numpy(dtype=object)[above_forward] == "call"
+    working_df["surfaceQuotePreferred"] = preferred
+
+    discounted_spot = underlying_price * np.exp(
+        -working_df["dividendYieldUsed"].to_numpy(dtype=float)
+        * working_df["time_to_expiration_years"].to_numpy(dtype=float)
     )
-    working_df["callEquivalentPrice"] = working_df.apply(
-        lambda row: _call_equivalent_price(
-            option_type=str(row["optionType"]).lower(),
-            option_price=float(row["surfaceOptionPrice"]),
-            spot=underlying_price,
-            strike=float(row["strike"]),
-            time_to_expiration=float(row["time_to_expiration_years"]),
-            risk_free_rate=risk_free_rate,
-            dividend_yield=float(row["dividendYieldUsed"]),
-        ),
-        axis=1,
+    discounted_strike = working_df["strike"].to_numpy(dtype=float) * np.exp(
+        -risk_free_rate * working_df["time_to_expiration_years"].to_numpy(dtype=float)
     )
+    surface_option_prices = working_df["surfaceOptionPrice"].to_numpy(dtype=float)
+    call_equivalent_prices = surface_option_prices.copy()
+    put_mask = option_types.to_numpy(dtype=object) == "put"
+    call_equivalent_prices[put_mask] = (
+        surface_option_prices[put_mask]
+        + discounted_spot[put_mask]
+        - discounted_strike[put_mask]
+    )
+    working_df["callEquivalentPrice"] = call_equivalent_prices
     working_df["surfaceWeightWorking"] = _surface_weights(working_df)
 
-    aggregated_rows = []
-    for (days_to_expiration, strike), group in working_df.groupby(["days_to_expiration", "strike"], sort=True):
-        preferred_group = group[group["surfaceQuotePreferred"]].copy()
-        selected_group = preferred_group if not preferred_group.empty else group.copy()
-        weights = selected_group["surfaceWeightWorking"].to_numpy(dtype=float)
-        if len(weights) == 0 or not np.all(np.isfinite(weights)) or float(weights.sum()) <= 0:
-            weights = np.ones(len(selected_group), dtype=float)
-
-        time_to_expiration = float(selected_group["time_to_expiration_years"].iloc[0])
-        forward = float(selected_group["forwardPrice"].iloc[0])
-        selected_dividend_yield = float(selected_group["dividendYieldUsed"].iloc[0])
-        log_moneyness = float(np.log(float(strike) / forward))
-        if abs(log_moneyness) <= SURFACE_ATM_LOG_MONEYNESS_BAND:
-            preferred_surface_side = "both"
-        elif log_moneyness < 0:
-            preferred_surface_side = "put"
-        else:
-            preferred_surface_side = "call"
-
-        aggregated_rows.append(
-            {
-                "days_to_expiration": int(days_to_expiration),
-                "strike": float(strike),
-                "time_to_expiration_years": time_to_expiration,
-                "forwardPrice": forward,
-                "dividendYieldUsed": selected_dividend_yield,
-                "callEquivalentPrice": float(
-                    np.average(selected_group["callEquivalentPrice"].to_numpy(dtype=float), weights=weights)
-                ),
-                "surfaceWeight": float(np.sum(weights)),
-                "selectedQuoteCount": int(len(selected_group)),
-                "selectedOptionTypes": "/".join(sorted(selected_group["optionType"].astype(str).str.lower().unique())),
-                "preferredSurfaceSide": preferred_surface_side,
-                "totalVolume": float(
-                    pd.to_numeric(selected_group.get("volume"), errors="coerce").fillna(0.0).sum()
-                ),
-                "totalOpenInterest": float(
-                    pd.to_numeric(selected_group.get("openInterest"), errors="coerce").fillna(0.0).sum()
-                ),
-            }
-        )
-
-    if not aggregated_rows:
+    group_keys = ["days_to_expiration", "strike"]
+    group_has_preferred = working_df.groupby(group_keys, sort=False)[
+        "surfaceQuotePreferred"
+    ].transform("any")
+    selected_df = working_df[
+        working_df["surfaceQuotePreferred"] | ~group_has_preferred
+    ].copy()
+    if selected_df.empty:
         return pd.DataFrame()
 
-    return pd.DataFrame(aggregated_rows).sort_values(
+    selected_df["optionTypeLower"] = selected_df["optionType"].astype(str).str.lower()
+    selected_df["weightedCallEquivalentPrice"] = (
+        selected_df["callEquivalentPrice"] * selected_df["surfaceWeightWorking"]
+    )
+    if "volume" in selected_df.columns:
+        selected_df["volumeNumeric"] = pd.to_numeric(
+            selected_df["volume"], errors="coerce"
+        ).fillna(0.0)
+    else:
+        selected_df["volumeNumeric"] = 0.0
+    if "openInterest" in selected_df.columns:
+        selected_df["openInterestNumeric"] = pd.to_numeric(
+            selected_df["openInterest"], errors="coerce"
+        ).fillna(0.0)
+    else:
+        selected_df["openInterestNumeric"] = 0.0
+
+    grouped = selected_df.groupby(group_keys, sort=True, dropna=True)
+    aggregated = grouped.agg(
+        time_to_expiration_years=("time_to_expiration_years", "first"),
+        forwardPrice=("forwardPrice", "first"),
+        dividendYieldUsed=("dividendYieldUsed", "first"),
+        weightedCallEquivalentPrice=("weightedCallEquivalentPrice", "sum"),
+        surfaceWeight=("surfaceWeightWorking", "sum"),
+        selectedQuoteCount=("surfaceWeightWorking", "size"),
+        totalVolume=("volumeNumeric", "sum"),
+        totalOpenInterest=("openInterestNumeric", "sum"),
+    ).reset_index()
+    aggregated["callEquivalentPrice"] = (
+        aggregated["weightedCallEquivalentPrice"] / aggregated["surfaceWeight"]
+    )
+    selected_types = grouped["optionTypeLower"].agg(
+        lambda values: "/".join(sorted(pd.unique(values)))
+    ).reset_index(name="selectedOptionTypes")
+    aggregated = aggregated.merge(selected_types, on=group_keys, how="left")
+
+    node_log_moneyness = np.log(
+        aggregated["strike"].to_numpy(dtype=float)
+        / aggregated["forwardPrice"].to_numpy(dtype=float)
+    )
+    aggregated["preferredSurfaceSide"] = np.where(
+        np.abs(node_log_moneyness) <= SURFACE_ATM_LOG_MONEYNESS_BAND,
+        "both",
+        np.where(node_log_moneyness < 0, "put", "call"),
+    )
+    aggregated = aggregated.drop(columns=["weightedCallEquivalentPrice"])
+
+    return aggregated.sort_values(
         ["days_to_expiration", "strike"], ascending=[True, True]
     ).reset_index(drop=True)
 
@@ -450,20 +594,13 @@ def _build_arbitrage_free_surface(
         for row_index, item in enumerate(slice_data):
             evaluation_strikes = item["forward"] * np.exp(k_grid)
             row_volatility = np.sqrt(np.maximum(total_variance[row_index], 0.0) / item["time_to_expiration_years"])
-            call_prices = np.array(
-                [
-                    _black_scholes_price(
-                        option_type="call",
-                        spot=underlying_price,
-                        strike=float(strike),
-                        time_to_expiration=float(item["time_to_expiration_years"]),
-                        risk_free_rate=risk_free_rate,
-                        volatility=float(volatility),
-                        dividend_yield=float(item["dividend_yield"]),
-                    )
-                    for strike, volatility in zip(evaluation_strikes, row_volatility)
-                ],
-                dtype=float,
+            call_prices = _black_scholes_call_prices_array(
+                spot=underlying_price,
+                strikes=evaluation_strikes,
+                time_to_expiration=float(item["time_to_expiration_years"]),
+                risk_free_rate=risk_free_rate,
+                volatility=row_volatility,
+                dividend_yield=float(item["dividend_yield"]),
             )
             projected_prices = _project_call_price_slice(
                 strikes=evaluation_strikes,
@@ -518,20 +655,13 @@ def _build_arbitrage_free_surface(
                 np.maximum(total_variance_dense[row_index], 0.0)
                 / max(float(time_to_expiration), np.finfo(float).eps)
             )
-            call_prices = np.array(
-                [
-                    _black_scholes_price(
-                        option_type="call",
-                        spot=underlying_price,
-                        strike=float(strike),
-                        time_to_expiration=float(time_to_expiration),
-                        risk_free_rate=risk_free_rate,
-                        volatility=float(volatility),
-                        dividend_yield=float(dividend_yield_dense[row_index]),
-                    )
-                    for strike, volatility in zip(grid_strike[row_index], row_volatility)
-                ],
-                dtype=float,
+            call_prices = _black_scholes_call_prices_array(
+                spot=underlying_price,
+                strikes=grid_strike[row_index],
+                time_to_expiration=float(time_to_expiration),
+                risk_free_rate=risk_free_rate,
+                volatility=row_volatility,
+                dividend_yield=float(dividend_yield_dense[row_index]),
             )
             projected_prices = _project_call_price_slice(
                 strikes=grid_strike[row_index],
@@ -655,6 +785,7 @@ def create_vol_surface(
     underlying_price: float | None = None,
     risk_free_rate: float = 0.02,
     dividend_yield: float = 0.0,
+    strike_range: Tuple[float, float] | None = None,
     dte_range: Tuple[int, int] | None = None,
 ):
     """
@@ -696,6 +827,17 @@ def create_vol_surface(
 
     observed_dte_min = int(working_df["days_to_expiration"].min())
     observed_dte_max = int(working_df["days_to_expiration"].max())
+    observed_strike_min = float(working_df["strike"].min())
+    observed_strike_max = float(working_df["strike"].max())
+    strike_axis_range = None
+    if strike_range is not None:
+        requested_min, requested_max = float(strike_range[0]), float(strike_range[1])
+        if requested_min > requested_max:
+            requested_min, requested_max = requested_max, requested_min
+        strike_axis_range = [requested_min, requested_max]
+    else:
+        strike_axis_range = [observed_strike_min, observed_strike_max]
+
     dte_axis_range = None
     if dte_range is not None:
         requested_min, requested_max = int(dte_range[0]), int(dte_range[1])
@@ -749,6 +891,7 @@ def create_vol_surface(
             bgcolor="#101a2a",
             xaxis=dict(
                 title="Strike Price",
+                range=strike_axis_range,
                 backgroundcolor="#0b1421",
                 gridcolor="#2c3b50",
                 zerolinecolor="#516275",

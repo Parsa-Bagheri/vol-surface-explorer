@@ -18,7 +18,6 @@ def _build_surface_input():
                         "strike": strike,
                         "days_to_expiration": dte,
                         "time_to_expiration_years": dte / 365.25,
-                        "impliedVolatilityRaw": iv_base,
                         "impliedVolatilityFinal": iv_base + (strike - 100.0) * 0.001,
                         "impliedVolatility": iv_base + (strike - 100.0) * 0.001,
                         "expirationDate": (now + timedelta(days=dte)).date(),
@@ -32,8 +31,6 @@ def _build_surface_input():
                         "marketPrice": 1.1,
                         "priceSourceUsed": "mid",
                         "spreadRatio": 0.1,
-                        "ivSourceUsed": "yfinance",
-                        "ivComputationMethod": "yfinance",
                         "confidenceLevel": "high",
                         "qualityFlags": "none",
                         "includeInSurface": True,
@@ -136,7 +133,7 @@ def test_arbitrage_free_surface_projection_enforces_discrete_static_arbitrage():
     assert np.all(np.diff(total_variance, axis=0) >= -1e-10)
 
 
-def _build_iv_source_surface_input(selected_iv: float, quoted_iv: float = 0.20):
+def _build_selected_iv_surface_input(selected_iv: float, quoted_iv: float = 0.20):
     now = datetime.now(timezone.utc)
     rows = []
     for dte in [20, 45]:
@@ -172,8 +169,8 @@ def _build_iv_source_surface_input(selected_iv: float, quoted_iv: float = 0.20):
 
 
 def test_surface_construction_uses_selected_iv_not_market_price_fallback():
-    low_iv_df = _build_iv_source_surface_input(selected_iv=0.20, quoted_iv=0.20)
-    high_provider_iv_df = _build_iv_source_surface_input(selected_iv=0.35, quoted_iv=0.20)
+    low_iv_df = _build_selected_iv_surface_input(selected_iv=0.20, quoted_iv=0.20)
+    high_iv_df = _build_selected_iv_surface_input(selected_iv=0.35, quoted_iv=0.20)
 
     _, _, _, _, low_nodes = _build_arbitrage_free_surface(
         df=low_iv_df,
@@ -183,7 +180,7 @@ def test_surface_construction_uses_selected_iv_not_market_price_fallback():
         dte_step=1,
     )
     _, _, _, _, high_nodes = _build_arbitrage_free_surface(
-        df=high_provider_iv_df,
+        df=high_iv_df,
         underlying_price=100.0,
         risk_free_rate=0.02,
         dividend_yield=0.0,
@@ -211,6 +208,32 @@ def test_include_low_confidence_allows_valid_rows_marked_excluded():
     assert len(fig.data) >= 1
 
 
+def test_create_vol_surface_tolerates_missing_optional_market_and_liquidity_columns():
+    now = datetime.now(timezone.utc)
+    df = pd.DataFrame(
+        [
+            {
+                "strike": 100.0,
+                "days_to_expiration": 30,
+                "time_to_expiration_years": 30.0 / 365.25,
+                "impliedVolatilityFinal": 0.22,
+                "expirationDate": (now + timedelta(days=30)).date(),
+                "optionType": "call",
+                "includeInSurface": True,
+            }
+        ]
+    )
+
+    fig = create_vol_surface(
+        df,
+        ticker="TEST",
+        smooth=False,
+        underlying_price=100.0,
+    )
+
+    assert len(fig.data) == 1
+
+
 def test_create_vol_surface_honors_requested_dte_axis_range():
     df = _build_surface_input()
 
@@ -223,6 +246,20 @@ def test_create_vol_surface_honors_requested_dte_axis_range():
     )
 
     assert list(fig.layout.scene.yaxis.range) == [7, 60]
+
+
+def test_create_vol_surface_honors_requested_strike_axis_range():
+    df = _build_surface_input()
+
+    fig = create_vol_surface(
+        df,
+        ticker="TEST",
+        smooth=False,
+        underlying_price=100.0,
+        strike_range=(93.0, 107.0),
+    )
+
+    assert list(fig.layout.scene.xaxis.range) == [93.0, 107.0]
 
 
 def test_create_vol_surface_leaves_title_to_web_shell():

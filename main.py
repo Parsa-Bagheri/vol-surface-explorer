@@ -116,11 +116,9 @@ def _print_diagnostics_summary(diagnostics: Dict[str, Any]) -> None:
     rows_retained = diagnostics.get("rows_retained", 0)
     rows_included = diagnostics.get("rows_surface_included", 0)
     rows_excluded = diagnostics.get("rows_surface_excluded", 0)
-    fallback_fraction = diagnostics.get("fallback_iv_fraction", 0.0) or 0.0
     print(
         "Diagnostics summary: "
-        f"retained={rows_retained}, included={rows_included}, excluded={rows_excluded}, "
-        f"fallback_iv_fraction={fallback_fraction:.3f}"
+        f"retained={rows_retained}, included={rows_included}, excluded={rows_excluded}"
     )
 
     flag_counts = diagnostics.get("flag_counts", {})
@@ -193,13 +191,6 @@ def main():
         help="Apply arbitrage-aware smoothing to build the unified volatility surface.",
     )
     parser.add_argument(
-        "--iv_source",
-        type=str,
-        default="auto",
-        choices=["auto", "yfinance", "black-scholes"],
-        help="IV mode: 'auto' (recommended), 'yfinance', or 'black-scholes'.",
-    )
-    parser.add_argument(
         "--risk_free_rate",
         type=float,
         default=0.02,
@@ -255,7 +246,6 @@ def main():
                 dte_min=args.dte_min,
                 dte_max=args.dte_max,
                 smooth=args.smooth,
-                iv_source=args.iv_source,
                 risk_free_rate=args.risk_free_rate,
                 dividend_yield=args.dividend_yield,
                 quality_mode=args.quality_mode,
@@ -279,7 +269,7 @@ def main():
         f"to ${current_price * args.strike_max_pct:.2f}"
     )
     print(f"DTE range: {args.dte_min} to {args.dte_max} days")
-    print(f"IV source: {args.iv_source}")
+    print("IV calculation: Black-Scholes-Merton quote inversion")
     print(f"Quality mode: {args.quality_mode}")
     print("Surface construction: unified call/put static-arbitrage-adjusted surface")
     print(f"Fetched {len(raw_options_df)} raw option contracts initially.")

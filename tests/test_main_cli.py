@@ -51,7 +51,6 @@ def test_main_cli_generates_html_and_diagnostics(tmp_path, monkeypatch):
                 "strike_max_pct": request.strike_max_pct,
                 "dte_min": request.dte_min,
                 "dte_max": request.dte_max,
-                "iv_source": request.iv_source,
                 "quality_mode": request.quality_mode,
                 "max_trade_age_hours": request.max_trade_age_hours,
                 "smooth": bool(request.smooth),
@@ -62,9 +61,6 @@ def test_main_cli_generates_html_and_diagnostics(tmp_path, monkeypatch):
             "rows_retained": len(cleaned_df),
             "rows_surface_included": len(cleaned_df),
             "rows_surface_excluded": 0,
-            "black_scholes_iv_fraction": 0.0,
-            "provider_iv_fraction": 0.0,
-            "fallback_iv_fraction": 0.0,
         }
         return SurfaceBuildResult(
             request=request,
@@ -87,8 +83,6 @@ def test_main_cli_generates_html_and_diagnostics(tmp_path, monkeypatch):
             str(tmp_path),
             "--diagnostics_json",
             str(diagnostics_path),
-            "--iv_source",
-            "auto",
         ],
     )
 
@@ -101,7 +95,6 @@ def test_main_cli_generates_html_and_diagnostics(tmp_path, monkeypatch):
     diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8"))
     assert "internal_validation" in diagnostics
     assert "flag_counts" in diagnostics
-    assert diagnostics["request"]["iv_source"] == "auto"
 
 
 def test_external_benchmark_report_computes_metrics(tmp_path):

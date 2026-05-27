@@ -18,7 +18,6 @@ from src.visualizer import create_vol_surface
 
 
 TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
-VALID_IV_SOURCES = {"auto", "yfinance", "black-scholes"}
 VALID_QUALITY_MODES = {"strict", "balanced", "lenient"}
 MIN_STRIKE_PCT = 0.50
 MAX_STRIKE_PCT = 1.50
@@ -36,7 +35,6 @@ class SurfaceRequest:
     dte_min: int = 1
     dte_max: int = 60
     smooth: bool = True
-    iv_source: str = "auto"
     risk_free_rate: float = 0.02
     dividend_yield: float = 0.0
     quality_mode: str = "lenient"
@@ -100,10 +98,6 @@ def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
     if dte_min < MIN_DTE or dte_max > MAX_DTE:
         raise ValueError(f"DTE bounds must stay between {MIN_DTE} and {MAX_DTE} days.")
 
-    iv_source = str(request.iv_source or "").strip().lower()
-    if iv_source not in VALID_IV_SOURCES:
-        raise ValueError("Invalid IV source.")
-
     quality_mode = str(request.quality_mode or "").strip().lower()
     if quality_mode not in VALID_QUALITY_MODES:
         raise ValueError("Invalid quality mode.")
@@ -131,7 +125,6 @@ def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
         dte_min=dte_min,
         dte_max=dte_max,
         smooth=bool(request.smooth),
-        iv_source=iv_source,
         risk_free_rate=risk_free_rate,
         dividend_yield=dividend_yield,
         quality_mode=quality_mode,
@@ -171,7 +164,6 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         option_type_to_plot="both",
         min_dte=validated_request.dte_min,
         max_dte=validated_request.dte_max,
-        iv_source=validated_request.iv_source,
         underlying_price=current_price,
         risk_free_rate=validated_request.risk_free_rate,
         dividend_yield=validated_request.dividend_yield,
@@ -195,7 +187,6 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         "strike_max_pct": validated_request.strike_max_pct,
         "dte_min": validated_request.dte_min,
         "dte_max": validated_request.dte_max,
-        "iv_source": validated_request.iv_source,
         "quality_mode": validated_request.quality_mode,
         "max_trade_age_hours": validated_request.max_trade_age_hours,
         "smooth": bool(validated_request.smooth),
@@ -219,6 +210,7 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         underlying_price=current_price,
         risk_free_rate=validated_request.risk_free_rate,
         dividend_yield=validated_request.dividend_yield,
+        strike_range=(min_strike_abs, max_strike_abs),
         dte_range=(validated_request.dte_min, validated_request.dte_max),
     )
 
