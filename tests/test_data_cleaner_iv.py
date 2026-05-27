@@ -11,6 +11,7 @@ from src.data_cleaner import (
     build_diagnostics_report,
     prepare_options_data,
 )
+from src.data_fetch import _expiration_dte
 
 
 def _black_scholes_call_price(
@@ -205,6 +206,156 @@ def test_auto_falls_back_from_placeholder_provider_iv():
     assert bool(row["includeInSurface"]) is True
 
 
+def test_black_scholes_mode_excludes_unreliable_wide_midpoint_iv():
+    spot_price = 100.0
+    recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+    raw_df = pd.DataFrame(
+        [
+            _base_row(
+                impliedVolatility=0.35,
+                bid=0.25,
+                ask=8.00,
+                lastPrice=4.00,
+                lastTradeDate=recent_trade,
+                volume=100.0,
+                openInterest=500.0,
+            )
+        ]
+    )
+
+    cleaned_df = prepare_options_data(
+        raw_df,
+        option_type_to_plot="call",
+        iv_source="black-scholes",
+        underlying_price=spot_price,
+        quality_mode="lenient",
+    )
+
+    assert len(cleaned_df) == 1
+    row = cleaned_df.iloc[0]
+    assert np.isfinite(row["blackScholesImpliedVolatility"])
+    assert "wide_recompute_spread" in row["qualityFlags"]
+    assert "wide_iv_bid_ask" in row["qualityFlags"]
+    assert "recomputed_iv_unreliable" in row["qualityFlags"]
+    assert pd.isna(row["impliedVolatilityFinal"])
+    assert row["ivSourceUsed"] == "none"
+    assert bool(row["includeInSurface"]) is False
+
+
+def test_black_scholes_mode_excludes_recent_trade_inside_wide_quote():
+    spot_price = 100.0
+    last_price = 2.50
+    raw_df = pd.DataFrame(
+        [
+            _base_row(
+                impliedVolatility=0.35,
+                bid=0.25,
+                ask=8.00,
+                lastPrice=last_price,
+                volume=100.0,
+                openInterest=500.0,
+            )
+        ]
+    )
+
+    cleaned_df = prepare_options_data(
+        raw_df,
+        option_type_to_plot="call",
+        iv_source="black-scholes",
+        underlying_price=spot_price,
+        quality_mode="lenient",
+    )
+
+    assert len(cleaned_df) == 1
+    row = cleaned_df.iloc[0]
+    assert row["priceSourceUsed"] == "mid"
+    assert "recent_trade_inside_wide_quote" in row["qualityFlags"]
+    assert "wide_recompute_spread" in row["qualityFlags"]
+    assert "wide_iv_bid_ask" in row["qualityFlags"]
+    assert "recomputed_iv_unreliable" in row["qualityFlags"]
+    assert pd.isna(row["impliedVolatilityFinal"])
+    assert bool(row["includeInSurface"]) is False
+
+
+def test_auto_keeps_valid_provider_iv_when_midpoint_recompute_is_unreliable():
+    spot_price = 100.0
+    provider_iv = 0.35
+    stale_trade = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    raw_df = pd.DataFrame(
+        [
+            _base_row(
+                impliedVolatility=provider_iv,
+                bid=0.25,
+                ask=8.00,
+                lastPrice=4.00,
+                lastTradeDate=stale_trade,
+                volume=100.0,
+                openInterest=500.0,
+            )
+        ]
+    )
+
+    cleaned_df = prepare_options_data(
+        raw_df,
+        option_type_to_plot="call",
+        iv_source="auto",
+        underlying_price=spot_price,
+        quality_mode="lenient",
+    )
+
+    assert len(cleaned_df) == 1
+    row = cleaned_df.iloc[0]
+    assert row["ivSourceUsed"] == "yfinance"
+    assert row["impliedVolatilityFinal"] == provider_iv
+    assert "wide_recompute_spread" in row["qualityFlags"]
+    assert "wide_iv_bid_ask" in row["qualityFlags"]
+    assert "provider_used_without_quote_sanity" in row["qualityFlags"]
+    assert row["confidenceLevel"] == "low"
+    assert bool(row["includeInSurface"]) is False
+
+
+def test_black_scholes_mode_keeps_last_price_iv_when_quote_support_is_missing():
+    spot_price = 100.0
+    true_volatility = 0.24
+    days_to_expiration = 30
+    t = days_to_expiration / 365.25
+    market_price = _black_scholes_call_price(
+        spot_price, 100.0, t, 0.02, true_volatility
+    )
+    recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+    raw_df = pd.DataFrame(
+        [
+            _base_row(
+                impliedVolatility=1e-5,
+                bid=0.0,
+                ask=0.0,
+                lastPrice=market_price,
+                lastTradeDate=recent_trade,
+                volume=100.0,
+                openInterest=0.0,
+            )
+        ]
+    )
+
+    cleaned_df = prepare_options_data(
+        raw_df,
+        option_type_to_plot="call",
+        iv_source="black-scholes",
+        underlying_price=spot_price,
+        quality_mode="lenient",
+        max_trade_age_hours=72.0,
+    )
+
+    assert len(cleaned_df) == 1
+    row = cleaned_df.iloc[0]
+    assert row["ivSourceUsed"] == "black-scholes"
+    assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
+    assert row["confidenceLevel"] == "medium"
+    assert bool(row["includeInSurface"]) is True
+    assert "no_two_sided_quote" in row["qualityFlags"]
+    assert "recomputed_iv_low_quote_support" in row["qualityFlags"]
+
+
 def test_arbitrage_violation_flagged_and_excluded():
     spot_price = 100.0
     raw_df = pd.DataFrame(
@@ -234,17 +385,24 @@ def test_arbitrage_violation_flagged_and_excluded():
     assert pd.isna(row["impliedVolatilityFinal"])
 
 
-def test_lenient_mode_retains_low_confidence_rows_but_excludes_from_surface():
+def test_lenient_auto_prefers_recomputed_iv_with_missing_quotes_when_last_price_is_usable():
     spot_price = 100.0
-    stale_trade = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    true_volatility = 0.24
+    days_to_expiration = 30
+    t = days_to_expiration / 365.25
+    market_price = _black_scholes_call_price(
+        spot_price, 100.0, t, 0.02, true_volatility
+    )
+    recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+    provider_iv = 0.28
     raw_df = pd.DataFrame(
         [
             _base_row(
-                impliedVolatility=0.28,
+                impliedVolatility=provider_iv,
                 bid=0.0,
                 ask=0.0,
-                lastPrice=5.0,
-                lastTradeDate=stale_trade,
+                lastPrice=market_price,
+                lastTradeDate=recent_trade,
             )
         ]
     )
@@ -260,9 +418,55 @@ def test_lenient_mode_retains_low_confidence_rows_but_excludes_from_surface():
 
     assert len(cleaned_df) == 1
     row = cleaned_df.iloc[0]
-    assert row["confidenceLevel"] == "low"
+    assert row["ivSourceUsed"] == "black-scholes"
+    assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
+    assert row["confidenceLevel"] == "medium"
+    assert bool(row["includeInSurface"]) is True
+    assert "stale_last_trade" not in row["qualityFlags"]
+    assert "no_two_sided_quote" in row["qualityFlags"]
+    assert "recomputed_iv_low_quote_support" in row["qualityFlags"]
+
+
+def test_black_scholes_mode_excludes_stale_last_price_when_quote_support_is_missing():
+    spot_price = 100.0
+    true_volatility = 0.24
+    days_to_expiration = 30
+    t = days_to_expiration / 365.25
+    market_price = _black_scholes_call_price(
+        spot_price, 100.0, t, 0.02, true_volatility
+    )
+    stale_trade = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    raw_df = pd.DataFrame(
+        [
+            _base_row(
+                impliedVolatility=0.28,
+                bid=0.0,
+                ask=0.0,
+                lastPrice=market_price,
+                lastTradeDate=stale_trade,
+                volume=100.0,
+                openInterest=500.0,
+            )
+        ]
+    )
+
+    cleaned_df = prepare_options_data(
+        raw_df,
+        option_type_to_plot="call",
+        iv_source="black-scholes",
+        underlying_price=spot_price,
+        quality_mode="lenient",
+        max_trade_age_hours=72.0,
+    )
+
+    assert len(cleaned_df) == 1
+    row = cleaned_df.iloc[0]
+    assert np.isfinite(row["blackScholesImpliedVolatility"])
+    assert row["ivSourceUsed"] == "none"
+    assert pd.isna(row["impliedVolatilityFinal"])
     assert bool(row["includeInSurface"]) is False
     assert "stale_last_trade" in row["qualityFlags"]
+    assert "recomputed_iv_unreliable" in row["qualityFlags"]
 
 
 def test_nan_open_interest_is_flagged_deterministically():
@@ -332,6 +536,40 @@ def test_min_dte_filter_removes_short_dated_contracts():
     assert cleaned_df["days_to_expiration"].iloc[0] >= 20
 
 
+def test_expiration_dte_uses_new_york_close_during_daylight_saving_time():
+    as_of = pd.Timestamp("2026-05-15 20:30:00", tz="UTC")
+
+    assert _expiration_dte("2026-05-15", as_of) == 0
+
+
+def test_yfinance_mode_does_not_attach_recompute_specific_iv():
+    spot_price = 100.0
+    raw_df = pd.DataFrame(
+        [
+            _base_row(
+                impliedVolatility=0.31,
+                bid=0.25,
+                ask=8.00,
+                lastPrice=4.00,
+            )
+        ]
+    )
+
+    cleaned_df = prepare_options_data(
+        raw_df,
+        option_type_to_plot="call",
+        iv_source="yfinance",
+        underlying_price=spot_price,
+        quality_mode="lenient",
+    )
+
+    row = cleaned_df.iloc[0]
+    assert row["ivSourceUsed"] == "yfinance"
+    assert pd.isna(row["blackScholesImpliedVolatility"])
+    assert "wide_recompute_spread" not in row["qualityFlags"]
+    assert "wide_iv_bid_ask" not in row["qualityFlags"]
+
+
 def test_diagnostics_report_counts_flags_and_exclusions():
     spot_price = 100.0
     now = datetime.now(timezone.utc)
@@ -343,7 +581,7 @@ def test_diagnostics_report_counts_flags_and_exclusions():
                 impliedVolatility=1e-5,
                 bid=0.0,
                 ask=0.0,
-                lastPrice=4.0,
+                lastPrice=0.0,
                 lastTradeDate=(now - timedelta(days=7)).isoformat(),
             ),
         ]

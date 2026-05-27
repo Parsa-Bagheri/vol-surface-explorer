@@ -7,26 +7,42 @@ import pandas as pd
 from scipy.optimize import brentq
 from scipy.stats import norm
 
+from src.time_utils import expiration_close_utc as option_expiration_close_utc
+from src.time_utils import normalize_as_of_utc
+
 
 IV_PLACEHOLDER_THRESHOLD = 1e-4
 MAX_REASONABLE_IV = 5.0
 ARBITRAGE_EPSILON = 1e-8
+MIN_FORWARD_PAIR_COUNT = 3
+MAX_FORWARD_ABS_LOG_MONEYNESS = 0.15
+MIN_REASONABLE_IMPLIED_DIVIDEND_YIELD = -0.25
+MAX_REASONABLE_IMPLIED_DIVIDEND_YIELD = 0.25
 
 QUALITY_MODE_CONFIG = {
     "strict": {
         "spread_ratio_max": 0.50,
+        "recompute_spread_ratio_max": 0.20,
+        "iv_bid_ask_width_max": 0.06,
+        "iv_bid_ask_width_ratio_max": 0.35,
         "allow_medium_surface": False,
         "min_volume": 10.0,
         "min_open_interest": 50.0,
     },
     "balanced": {
         "spread_ratio_max": 1.00,
+        "recompute_spread_ratio_max": 0.35,
+        "iv_bid_ask_width_max": 0.08,
+        "iv_bid_ask_width_ratio_max": 0.50,
         "allow_medium_surface": True,
         "min_volume": 5.0,
         "min_open_interest": 25.0,
     },
     "lenient": {
         "spread_ratio_max": 2.00,
+        "recompute_spread_ratio_max": 0.50,
+        "iv_bid_ask_width_max": 0.10,
+        "iv_bid_ask_width_ratio_max": 0.75,
         "allow_medium_surface": True,
         "min_volume": 1.0,
         "min_open_interest": 5.0,
@@ -190,6 +206,7 @@ def _select_market_price(
     row: pd.Series,
     max_trade_age_hours: float,
     spread_ratio_max: float,
+    recompute_spread_ratio_max: float,
     now_utc: pd.Timestamp,
 ) -> Tuple[float, str, Set[str], float]:
     """Select market price source and attach quality flags."""
@@ -215,6 +232,23 @@ def _select_market_price(
             spread_ratio = (ask - bid) / market_price
             if np.isfinite(spread_ratio) and spread_ratio > spread_ratio_max:
                 flags.add("wide_spread")
+
+            if (
+                np.isfinite(spread_ratio)
+                and spread_ratio > recompute_spread_ratio_max
+                and np.isfinite(last_price)
+                and last_price > 0
+            ):
+                if pd.isna(last_trade_date):
+                    flags.add("stale_last_trade")
+                else:
+                    age_hours = (now_utc - last_trade_date).total_seconds() / 3600.0
+                    if age_hours > max_trade_age_hours:
+                        flags.add("stale_last_trade")
+                    elif bid <= last_price <= ask:
+                        flags.add("recent_trade_inside_wide_quote")
+                    else:
+                        flags.add("last_trade_outside_quote")
         return float(market_price), price_source, flags, spread_ratio
 
     flags.add("no_two_sided_quote")
@@ -230,11 +264,175 @@ def _select_market_price(
         return float(market_price), price_source, flags, spread_ratio
 
     if np.isfinite(bid) and bid > 0:
+        flags.add("one_sided_quote_price")
         return float(bid), "bid", flags, spread_ratio
     if np.isfinite(ask) and ask > 0:
+        flags.add("one_sided_quote_price")
         return float(ask), "ask", flags, spread_ratio
 
     return float("nan"), "none", flags, spread_ratio
+
+
+def _compute_bid_ask_iv_width(
+    option_type: str,
+    spot: float,
+    strike: float,
+    time_to_expiration: float,
+    risk_free_rate: float,
+    dividend_yield: float,
+    bid: float,
+    ask: float,
+    midpoint_iv: float,
+) -> Tuple[float, float, float, float]:
+    """Convert a two-sided quote spread into an implied-volatility interval."""
+    if (
+        option_type not in {"call", "put"}
+        or not np.isfinite(spot)
+        or spot <= 0
+        or not np.isfinite(strike)
+        or strike <= 0
+        or not np.isfinite(time_to_expiration)
+        or time_to_expiration <= 0
+        or not np.isfinite(bid)
+        or not np.isfinite(ask)
+        or bid <= 0
+        or ask <= 0
+        or ask < bid
+    ):
+        return float("nan"), float("nan"), float("nan"), float("nan")
+
+    bid_iv = _implied_volatility(
+        option_type=option_type,
+        spot=spot,
+        strike=strike,
+        time_to_expiration=time_to_expiration,
+        risk_free_rate=risk_free_rate,
+        market_price=bid,
+        dividend_yield=dividend_yield,
+    )
+    ask_iv = _implied_volatility(
+        option_type=option_type,
+        spot=spot,
+        strike=strike,
+        time_to_expiration=time_to_expiration,
+        risk_free_rate=risk_free_rate,
+        market_price=ask,
+        dividend_yield=dividend_yield,
+    )
+    if not np.isfinite(bid_iv) or not np.isfinite(ask_iv):
+        return bid_iv, ask_iv, float("nan"), float("nan")
+
+    iv_width = max(float(ask_iv - bid_iv), 0.0)
+    denominator = midpoint_iv
+    if not np.isfinite(denominator) or denominator <= 0:
+        denominator = 0.5 * (bid_iv + ask_iv)
+    iv_width_ratio = (
+        float(iv_width / denominator)
+        if np.isfinite(denominator) and denominator > 0
+        else float("nan")
+    )
+    return float(bid_iv), float(ask_iv), float(iv_width), iv_width_ratio
+
+
+def _fallback_forward_price(
+    spot: float,
+    time_to_expiration: float,
+    risk_free_rate: float,
+    dividend_yield: float,
+) -> float:
+    if (
+        not np.isfinite(spot)
+        or spot <= 0
+        or not np.isfinite(time_to_expiration)
+        or time_to_expiration <= 0
+    ):
+        return float("nan")
+    return float(spot * np.exp((risk_free_rate - dividend_yield) * time_to_expiration))
+
+
+def _estimate_forward_terms(
+    df: pd.DataFrame,
+    underlying_price: float,
+    risk_free_rate: float,
+    fallback_dividend_yield: float,
+) -> pd.DataFrame:
+    """Estimate expiry-level forwards from put-call parity when quotes are usable."""
+    forward_df = df.copy()
+    forward_df["forwardPrice"] = forward_df["time_to_expiration_years"].apply(
+        lambda t: _fallback_forward_price(
+            spot=underlying_price,
+            time_to_expiration=_to_float(t),
+            risk_free_rate=risk_free_rate,
+            dividend_yield=fallback_dividend_yield,
+        )
+    )
+    forward_df["dividendYieldUsed"] = float(fallback_dividend_yield)
+    forward_df["forwardEstimationMethod"] = "configured_dividend_yield"
+
+    if not np.isfinite(underlying_price) or underlying_price <= 0:
+        return forward_df
+
+    for expiration_date, group in forward_df.groupby("expirationDate", dropna=True):
+        time_to_expiration = _to_float(group["time_to_expiration_years"].iloc[0])
+        if not np.isfinite(time_to_expiration) or time_to_expiration <= 0:
+            continue
+
+        calls = group[group["optionType"] == "call"][
+            ["strike", "bid", "ask", "volume", "openInterest"]
+        ].copy()
+        puts = group[group["optionType"] == "put"][
+            ["strike", "bid", "ask", "volume", "openInterest"]
+        ].copy()
+        if calls.empty or puts.empty:
+            continue
+
+        paired = calls.merge(puts, on="strike", suffixes=("_call", "_put"))
+        paired = paired[
+            (paired["bid_call"] > 0)
+            & (paired["ask_call"] > paired["bid_call"])
+            & (paired["bid_put"] > 0)
+            & (paired["ask_put"] > paired["bid_put"])
+            & (paired["strike"] > 0)
+        ].copy()
+        if paired.empty:
+            continue
+
+        paired["log_moneyness_abs"] = np.abs(np.log(paired["strike"] / underlying_price))
+        paired = paired[paired["log_moneyness_abs"] <= MAX_FORWARD_ABS_LOG_MONEYNESS]
+        if len(paired) < MIN_FORWARD_PAIR_COUNT:
+            continue
+
+        paired["call_mid"] = 0.5 * (paired["bid_call"] + paired["ask_call"])
+        paired["put_mid"] = 0.5 * (paired["bid_put"] + paired["ask_put"])
+        discount_factor = np.exp(-risk_free_rate * time_to_expiration)
+        paired["forward_candidate"] = paired["strike"] + (
+            paired["call_mid"] - paired["put_mid"]
+        ) / discount_factor
+        paired = paired[
+            np.isfinite(paired["forward_candidate"]) & (paired["forward_candidate"] > 0)
+        ].copy()
+        if len(paired) < MIN_FORWARD_PAIR_COUNT:
+            continue
+
+        paired = paired.sort_values("log_moneyness_abs").head(7)
+        forward_price = float(paired["forward_candidate"].median())
+        implied_dividend_yield = float(
+            risk_free_rate - np.log(forward_price / underlying_price) / time_to_expiration
+        )
+        if not (
+            np.isfinite(implied_dividend_yield)
+            and MIN_REASONABLE_IMPLIED_DIVIDEND_YIELD
+            <= implied_dividend_yield
+            <= MAX_REASONABLE_IMPLIED_DIVIDEND_YIELD
+        ):
+            continue
+
+        mask = forward_df["expirationDate"] == expiration_date
+        forward_df.loc[mask, "forwardPrice"] = forward_price
+        forward_df.loc[mask, "dividendYieldUsed"] = implied_dividend_yield
+        forward_df.loc[mask, "forwardEstimationMethod"] = "put_call_parity"
+
+    return forward_df
 
 
 def _resolve_row_iv(
@@ -257,6 +455,11 @@ def _resolve_row_iv(
     volume = _to_float(row.get("volume"))
     open_interest = _to_float(row.get("openInterest"))
     implied_vol_raw = _to_float(row.get("impliedVolatilityRaw"))
+    bid = _to_float(row.get("bid"))
+    ask = _to_float(row.get("ask"))
+    row_dividend_yield = _to_float(row.get("dividendYieldUsed"))
+    if not np.isfinite(row_dividend_yield):
+        row_dividend_yield = dividend_yield
 
     if not np.isfinite(volume) or volume <= 0:
         flags.add("volume_zero_or_missing")
@@ -282,12 +485,20 @@ def _resolve_row_iv(
         row,
         max_trade_age_hours=max_trade_age_hours,
         spread_ratio_max=spread_ratio_max,
+        recompute_spread_ratio_max=quality_config["recompute_spread_ratio_max"],
         now_utc=now_utc,
     )
     flags.update(price_flags)
 
+    needs_recomputed_iv = iv_source_mode in {"auto", "black-scholes"}
     bs_iv = float("nan")
+    bid_iv = float("nan")
+    ask_iv = float("nan")
+    iv_bid_ask_width = float("nan")
+    iv_bid_ask_width_ratio = float("nan")
     if (
+        needs_recomputed_iv
+        and
         option_type in {"call", "put"}
         and np.isfinite(underlying_price)
         and underlying_price > 0
@@ -304,7 +515,7 @@ def _resolve_row_iv(
             strike=strike,
             time_to_expiration=time_to_expiration_years,
             risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
+            dividend_yield=row_dividend_yield,
         )
         if market_price < lower - ARBITRAGE_EPSILON or market_price > upper + ARBITRAGE_EPSILON:
             flags.add("arbitrage_violation")
@@ -316,11 +527,66 @@ def _resolve_row_iv(
                 time_to_expiration=time_to_expiration_years,
                 risk_free_rate=risk_free_rate,
                 market_price=market_price,
-                dividend_yield=dividend_yield,
+                dividend_yield=row_dividend_yield,
             )
             if np.isfinite(bs_iv) and bs_iv > MAX_REASONABLE_IV:
                 flags.add("iv_outlier")
                 bs_iv = float("nan")
+
+            if price_source == "mid":
+                (
+                    bid_iv,
+                    ask_iv,
+                    iv_bid_ask_width,
+                    iv_bid_ask_width_ratio,
+                ) = _compute_bid_ask_iv_width(
+                    option_type=option_type,
+                    spot=underlying_price,
+                    strike=strike,
+                    time_to_expiration=time_to_expiration_years,
+                    risk_free_rate=risk_free_rate,
+                    dividend_yield=row_dividend_yield,
+                    bid=bid,
+                    ask=ask,
+                    midpoint_iv=bs_iv,
+                )
+                if not np.isfinite(iv_bid_ask_width):
+                    flags.add("iv_bid_ask_width_unavailable")
+                else:
+                    if iv_bid_ask_width > quality_config["iv_bid_ask_width_max"]:
+                        flags.add("wide_iv_bid_ask")
+                    if (
+                        np.isfinite(iv_bid_ask_width_ratio)
+                        and iv_bid_ask_width_ratio
+                        > quality_config["iv_bid_ask_width_ratio_max"]
+                    ):
+                        flags.add("wide_iv_bid_ask")
+
+    if (
+        needs_recomputed_iv
+        and
+        price_source == "mid"
+        and np.isfinite(spread_ratio)
+        and spread_ratio > quality_config["recompute_spread_ratio_max"]
+    ):
+        flags.add("wide_recompute_spread")
+
+    recomputed_iv_usable = bool(
+        np.isfinite(bs_iv)
+        and bs_iv > 0
+        and "arbitrage_violation" not in flags
+        and "stale_last_trade" not in flags
+        and "one_sided_quote_price" not in flags
+        and "wide_recompute_spread" not in flags
+        and "wide_iv_bid_ask" not in flags
+        and "iv_bid_ask_width_unavailable" not in flags
+        and price_source in {"mid", "lastPrice"}
+    )
+    recomputed_iv_has_full_quote_support = bool(
+        recomputed_iv_usable
+        and "stale_last_trade" not in flags
+        and "no_two_sided_quote" not in flags
+    )
 
     quote_sanity_ok = (
         "no_two_sided_quote" not in flags
@@ -336,20 +602,26 @@ def _resolve_row_iv(
             implied_vol_final = implied_vol_raw
             iv_source_used = "yfinance"
     elif iv_source_mode == "black-scholes":
-        if np.isfinite(bs_iv) and bs_iv > 0:
+        if recomputed_iv_usable:
             implied_vol_final = bs_iv
             iv_source_used = "black-scholes"
-    else:  # auto
-        if provider_iv_valid and quote_sanity_ok:
-            implied_vol_final = implied_vol_raw
-            iv_source_used = "yfinance"
+            if not recomputed_iv_has_full_quote_support:
+                flags.add("recomputed_iv_low_quote_support")
         elif np.isfinite(bs_iv) and bs_iv > 0:
+            flags.add("recomputed_iv_unreliable")
+    else:  # auto
+        if recomputed_iv_usable:
             implied_vol_final = bs_iv
             iv_source_used = "black-scholes"
+            if not recomputed_iv_has_full_quote_support:
+                flags.add("recomputed_iv_low_quote_support")
         elif provider_iv_valid:
             implied_vol_final = implied_vol_raw
             iv_source_used = "yfinance"
-            flags.add("provider_used_without_quote_sanity")
+            if not quote_sanity_ok or not recomputed_iv_has_full_quote_support:
+                flags.add("provider_used_without_quote_sanity")
+        elif np.isfinite(bs_iv) and bs_iv > 0:
+            flags.add("recomputed_iv_unreliable")
 
     if not np.isfinite(implied_vol_final) or implied_vol_final <= 0:
         flags.add("iv_unavailable")
@@ -366,18 +638,31 @@ def _resolve_row_iv(
     has_volume_issue = "volume_zero_or_missing" in flags or "low_volume" in flags
     has_open_interest_issue = "oi_zero_or_missing" in flags or "low_open_interest" in flags
     has_liquidity_issue = has_volume_issue or has_open_interest_issue
+    selected_provider_iv = iv_source_used == "yfinance"
+    selected_recomputed_iv = iv_source_used == "black-scholes"
+    provider_blocking_flags = {
+        "wide_recompute_spread",
+        "wide_iv_bid_ask",
+        "iv_bid_ask_width_unavailable",
+        "last_trade_outside_quote",
+    }
     if (
         "iv_unavailable" in flags
-        or "arbitrage_violation" in flags
-        or "stale_last_trade" in flags
+        or (not selected_provider_iv and "arbitrage_violation" in flags)
+        or "recomputed_iv_unreliable" in flags
+        or (selected_provider_iv and bool(provider_blocking_flags.intersection(flags)))
         or (has_volume_issue and has_open_interest_issue)
-        or ("no_two_sided_quote" in flags and has_liquidity_issue)
     ):
         confidence_level = "low"
     elif (
-        iv_source_used == "black-scholes"
+        selected_recomputed_iv
+        or "arbitrage_violation" in flags
+        or "stale_last_trade" in flags
         or "no_two_sided_quote" in flags
         or "wide_spread" in flags
+        or "wide_recompute_spread" in flags
+        or "wide_iv_bid_ask" in flags
+        or "iv_bid_ask_width_unavailable" in flags
         or has_liquidity_issue
         or "provider_used_without_quote_sanity" in flags
     ):
@@ -408,6 +693,11 @@ def _resolve_row_iv(
             "marketPrice": market_price,
             "priceSourceUsed": price_source,
             "spreadRatio": spread_ratio,
+            "blackScholesImpliedVolatility": bs_iv,
+            "bidImpliedVolatility": bid_iv,
+            "askImpliedVolatility": ask_iv,
+            "ivBidAskWidth": iv_bid_ask_width,
+            "ivBidAskWidthRatio": iv_bid_ask_width_ratio,
             "impliedVolatilityFinal": implied_vol_final,
             "ivSourceUsed": iv_source_used,
             "confidenceLevel": confidence_level,
@@ -432,7 +722,8 @@ def prepare_options_data(
     risk_free_rate: float = 0.02,
     dividend_yield: float = 0.0,
     quality_mode: str = "lenient",
-    max_trade_age_hours: float = 72.0,
+    max_trade_age_hours: float = 120.0,
+    as_of_utc: pd.Timestamp = None,
 ) -> pd.DataFrame:
     """
     Clean and enrich options data for volatility-surface visualization.
@@ -477,8 +768,15 @@ def prepare_options_data(
         print(f"No data remaining after filtering for option type: {option_type_to_plot}")
         return pd.DataFrame()
 
+    as_of_utc = normalize_as_of_utc(as_of_utc)
     expiration_utc = pd.to_datetime(clean_df["expirationDate"], errors="coerce", utc=True)
     clean_df["expirationDate"] = expiration_utc.dt.tz_convert(None)
+    if "expirationCloseUtc" in clean_df.columns:
+        expiration_close_times_utc = pd.to_datetime(
+            clean_df["expirationCloseUtc"], errors="coerce", utc=True
+        )
+    else:
+        expiration_close_times_utc = expiration_utc.map(option_expiration_close_utc)
     clean_df["lastTradeDate"] = pd.to_datetime(
         clean_df["lastTradeDate"], utc=True, errors="coerce"
     )
@@ -492,11 +790,8 @@ def prepare_options_data(
     clean_df["ask"] = pd.to_numeric(clean_df["ask"], errors="coerce")
     clean_df["lastPrice"] = pd.to_numeric(clean_df["lastPrice"], errors="coerce")
 
-    # DTE uses expiration close at ~4pm ET (21:00 UTC) for near-expiry stability.
-    now_utc = pd.Timestamp.now(tz="UTC")
-    expiration_close_utc = expiration_utc + pd.Timedelta(hours=21)
     remaining_days = (
-        expiration_close_utc - now_utc
+        expiration_close_times_utc - as_of_utc
     ).dt.total_seconds() / (24.0 * 60.0 * 60.0)
     clean_df["time_to_expiration_years"] = remaining_days / 365.25
     clean_df["days_to_expiration"] = np.ceil(remaining_days).astype("Int64")
@@ -538,6 +833,13 @@ def prepare_options_data(
             )
         print("Warning: Invalid underlying price for auto IV fallback. Black-Scholes fallback disabled.")
 
+    clean_df = _estimate_forward_terms(
+        clean_df,
+        underlying_price=underlying_price,
+        risk_free_rate=risk_free_rate,
+        fallback_dividend_yield=dividend_yield,
+    )
+
     resolved = clean_df.apply(
         lambda row: _resolve_row_iv(
             row=row,
@@ -547,7 +849,7 @@ def prepare_options_data(
             risk_free_rate=risk_free_rate,
             dividend_yield=dividend_yield,
             max_trade_age_hours=max_trade_age_hours,
-            now_utc=now_utc,
+            now_utc=as_of_utc,
         ),
         axis=1,
     )
@@ -573,6 +875,14 @@ def prepare_options_data(
         "marketPrice",
         "priceSourceUsed",
         "spreadRatio",
+        "forwardPrice",
+        "dividendYieldUsed",
+        "forwardEstimationMethod",
+        "blackScholesImpliedVolatility",
+        "bidImpliedVolatility",
+        "askImpliedVolatility",
+        "ivBidAskWidth",
+        "ivBidAskWidthRatio",
         "ivSourceUsed",
         "ivComputationMethod",
         "confidenceLevel",
@@ -598,8 +908,16 @@ def build_internal_validation_report(
     underlying_price: float,
     risk_free_rate: float = 0.02,
     dividend_yield: float = 0.0,
+    dte_range: Tuple[int, int] | None = None,
 ) -> Dict[str, float]:
     """Build repricing diagnostics from final IV vs selected market price."""
+    requested_dte_min = None
+    requested_dte_max = None
+    if dte_range is not None:
+        requested_dte_min, requested_dte_max = int(dte_range[0]), int(dte_range[1])
+        if requested_dte_min > requested_dte_max:
+            requested_dte_min, requested_dte_max = requested_dte_max, requested_dte_min
+
     if df is None or df.empty:
         return {
             "rows_checked": 0,
@@ -608,6 +926,8 @@ def build_internal_validation_report(
             "repricing_rmse": None,
             "repricing_p95_abs_error": None,
             "arbitrage_bound_violations": 0,
+            "requested_dte_min": requested_dte_min,
+            "requested_dte_max": requested_dte_max,
         }
 
     checks_df = df.copy()
@@ -629,6 +949,8 @@ def build_internal_validation_report(
             "repricing_rmse": None,
             "repricing_p95_abs_error": None,
             "arbitrage_bound_violations": 0,
+            "requested_dte_min": requested_dte_min,
+            "requested_dte_max": requested_dte_max,
         }
 
     model_prices: List[float] = []
@@ -640,6 +962,9 @@ def build_internal_validation_report(
         t = _to_float(row["time_to_expiration_years"])
         market_price = _to_float(row.get("marketPrice"))
         iv = _to_float(row["impliedVolatilityFinal"])
+        row_dividend_yield = _to_float(row.get("dividendYieldUsed"))
+        if not np.isfinite(row_dividend_yield):
+            row_dividend_yield = dividend_yield
         if option_type not in {"call", "put"}:
             continue
 
@@ -650,7 +975,7 @@ def build_internal_validation_report(
                 strike,
                 t,
                 risk_free_rate,
-                dividend_yield,
+                row_dividend_yield,
             )
             if market_price < lower - ARBITRAGE_EPSILON or market_price > upper + ARBITRAGE_EPSILON:
                 arbitrage_violations += 1
@@ -662,7 +987,7 @@ def build_internal_validation_report(
             time_to_expiration=t,
             risk_free_rate=risk_free_rate,
             volatility=iv,
-            dividend_yield=dividend_yield,
+            dividend_yield=row_dividend_yield,
         )
         if np.isfinite(market_price) and market_price > 0 and np.isfinite(model_price):
             market_prices.append(float(market_price))
@@ -676,6 +1001,8 @@ def build_internal_validation_report(
             "repricing_rmse": None,
             "repricing_p95_abs_error": None,
             "arbitrage_bound_violations": int(arbitrage_violations),
+            "requested_dte_min": requested_dte_min,
+            "requested_dte_max": requested_dte_max,
         }
 
     error = np.array(model_prices) - np.array(market_prices)
@@ -687,6 +1014,8 @@ def build_internal_validation_report(
         "repricing_rmse": float(np.sqrt(np.mean(error**2))),
         "repricing_p95_abs_error": float(np.quantile(abs_error, 0.95)),
         "arbitrage_bound_violations": int(arbitrage_violations),
+        "requested_dte_min": requested_dte_min,
+        "requested_dte_max": requested_dte_max,
     }
 
 
@@ -694,13 +1023,19 @@ def build_diagnostics_report(
     df: pd.DataFrame,
     raw_row_count: int = None,
 ) -> Dict[str, object]:
-    """Summarize quality, fallback usage, and exclusions."""
+    """Summarize quality, IV source usage, and exclusions."""
     if df is None or df.empty:
         return {
             "raw_row_count": int(raw_row_count) if raw_row_count is not None else None,
             "rows_retained": 0,
             "rows_surface_included": 0,
             "rows_surface_excluded": 0,
+            "observed_dte_min": None,
+            "observed_dte_max": None,
+            "surface_dte_min": None,
+            "surface_dte_max": None,
+            "black_scholes_iv_fraction": 0.0,
+            "provider_iv_fraction": 0.0,
             "fallback_iv_fraction": 0.0,
             "iv_source_counts": {},
             "confidence_counts": {},
@@ -713,13 +1048,17 @@ def build_diagnostics_report(
     included_mask = retained_df["includeInSurface"].fillna(False).astype(bool)
     included_df = retained_df[included_mask]
     finite_iv_mask = retained_df["impliedVolatilityFinal"].notna()
+    observed_dte = pd.to_numeric(retained_df["days_to_expiration"], errors="coerce").dropna()
+    surface_dte = pd.to_numeric(included_df["days_to_expiration"], errors="coerce").dropna()
 
     iv_source_counts = (
         retained_df["ivSourceUsed"].fillna("none").value_counts().sort_index().to_dict()
     )
-    fallback_count = int((retained_df["ivSourceUsed"] == "black-scholes").sum())
-    fallback_denom = max(int(finite_iv_mask.sum()), 1)
-    fallback_iv_fraction = fallback_count / fallback_denom
+    source_denom = max(int(finite_iv_mask.sum()), 1)
+    black_scholes_count = int((retained_df["ivSourceUsed"] == "black-scholes").sum())
+    provider_count = int((retained_df["ivSourceUsed"] == "yfinance").sum())
+    black_scholes_iv_fraction = black_scholes_count / source_denom
+    provider_iv_fraction = provider_count / source_denom
 
     confidence_counts = (
         retained_df["confidenceLevel"].fillna("unknown").value_counts().sort_index().to_dict()
@@ -747,6 +1086,8 @@ def build_diagnostics_report(
                 "high_confidence_rows": int((group["confidenceLevel"] == "high").sum()),
                 "medium_confidence_rows": int((group["confidenceLevel"] == "medium").sum()),
                 "low_confidence_rows": int((group["confidenceLevel"] == "low").sum()),
+                "black_scholes_rows": int((group["ivSourceUsed"] == "black-scholes").sum()),
+                "provider_rows": int((group["ivSourceUsed"] == "yfinance").sum()),
                 "fallback_rows": int((group["ivSourceUsed"] == "black-scholes").sum()),
             }
         )
@@ -757,7 +1098,13 @@ def build_diagnostics_report(
         "rows_retained": int(len(retained_df)),
         "rows_surface_included": int(len(included_df)),
         "rows_surface_excluded": int(len(retained_df) - len(included_df)),
-        "fallback_iv_fraction": float(fallback_iv_fraction),
+        "observed_dte_min": int(observed_dte.min()) if not observed_dte.empty else None,
+        "observed_dte_max": int(observed_dte.max()) if not observed_dte.empty else None,
+        "surface_dte_min": int(surface_dte.min()) if not surface_dte.empty else None,
+        "surface_dte_max": int(surface_dte.max()) if not surface_dte.empty else None,
+        "black_scholes_iv_fraction": float(black_scholes_iv_fraction),
+        "provider_iv_fraction": float(provider_iv_fraction),
+        "fallback_iv_fraction": float(black_scholes_iv_fraction),
         "iv_source_counts": {str(k): int(v) for k, v in iv_source_counts.items()},
         "confidence_counts": {str(k): int(v) for k, v in confidence_counts.items()},
         "flag_counts": {str(k): int(v) for k, v in sorted(flag_counts.items())},

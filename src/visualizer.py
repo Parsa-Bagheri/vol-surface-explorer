@@ -10,9 +10,13 @@ from scipy.optimize import Bounds, LinearConstraint, minimize
 from src.data_cleaner import _black_scholes_price, _implied_volatility, _to_float
 
 
-ARBITRAGE_K_GRID_SIZE = 41
+ARBITRAGE_K_GRID_SIZE = 81
 ARBITRAGE_PROJECTION_ITERATIONS = 3
 SURFACE_ATM_LOG_MONEYNESS_BAND = 0.02
+MIN_SMOOTH_SLICE_NODE_COUNT = 3
+MIN_SMOOTH_MATURITY_SLICE_COUNT = 3
+MIN_SMOOTH_SLICE_LOG_MONEYNESS_WIDTH = 0.01
+MAX_SMOOTH_DTE_GRID_POINTS = 80
 
 
 def _forward_price(
@@ -43,14 +47,13 @@ def _surface_option_price(
     risk_free_rate: float,
     dividend_yield: float,
 ) -> float:
-    market_price = _to_float(row.get("marketPrice"))
-    if np.isfinite(market_price) and market_price > 0:
-        return float(market_price)
-
     option_type = str(row.get("optionType", "")).lower()
     strike = _to_float(row.get("strike"))
     time_to_expiration = _to_float(row.get("time_to_expiration_years"))
     implied_volatility = _to_float(row.get("impliedVolatilityFinal"))
+    row_dividend_yield = _to_float(row.get("dividendYieldUsed"))
+    if not np.isfinite(row_dividend_yield):
+        row_dividend_yield = dividend_yield
     if (
         option_type not in {"call", "put"}
         or not np.isfinite(strike)
@@ -58,10 +61,16 @@ def _surface_option_price(
         or not np.isfinite(time_to_expiration)
         or time_to_expiration <= 0
         or not np.isfinite(implied_volatility)
-        or implied_volatility < 0
+        or implied_volatility <= 0
     ):
+        market_price = _to_float(row.get("marketPrice"))
+        if np.isfinite(market_price) and market_price > 0:
+            return float(market_price)
         return float("nan")
 
+    # The selected IV is the source-of-truth for the surface. In Black-Scholes
+    # mode this reprices back to the quote used for inversion; in provider-IV
+    # mode it preserves provider-vs-recomputed differences for comparison.
     return _black_scholes_price(
         option_type=option_type,
         spot=underlying_price,
@@ -69,7 +78,7 @@ def _surface_option_price(
         time_to_expiration=time_to_expiration,
         risk_free_rate=risk_free_rate,
         volatility=implied_volatility,
-        dividend_yield=dividend_yield,
+        dividend_yield=row_dividend_yield,
     )
 
 
@@ -208,15 +217,32 @@ def _build_surface_nodes(
     if working_df.empty:
         return pd.DataFrame()
 
-    working_df["forwardPrice"] = working_df.apply(
-        lambda row: _forward_price(
-            spot=underlying_price,
-            time_to_expiration=float(row["time_to_expiration_years"]),
-            risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-        ),
-        axis=1,
-    )
+    if "forwardPrice" in working_df.columns:
+        working_df["forwardPrice"] = pd.to_numeric(
+            working_df["forwardPrice"], errors="coerce"
+        )
+    else:
+        working_df["forwardPrice"] = np.nan
+    missing_forward = ~np.isfinite(working_df["forwardPrice"])
+    if missing_forward.any():
+        working_df.loc[missing_forward, "forwardPrice"] = working_df.loc[
+            missing_forward
+        ].apply(
+            lambda row: _forward_price(
+                spot=underlying_price,
+                time_to_expiration=float(row["time_to_expiration_years"]),
+                risk_free_rate=risk_free_rate,
+                dividend_yield=dividend_yield,
+            ),
+            axis=1,
+        )
+    if "dividendYieldUsed" in working_df.columns:
+        working_df["dividendYieldUsed"] = pd.to_numeric(
+            working_df["dividendYieldUsed"], errors="coerce"
+        )
+    else:
+        working_df["dividendYieldUsed"] = dividend_yield
+    working_df["dividendYieldUsed"] = working_df["dividendYieldUsed"].fillna(dividend_yield)
     working_df["surfaceQuotePreferred"] = working_df.apply(
         lambda row: _surface_quote_is_preferred(
             option_type=str(row["optionType"]).lower(),
@@ -233,7 +259,7 @@ def _build_surface_nodes(
             strike=float(row["strike"]),
             time_to_expiration=float(row["time_to_expiration_years"]),
             risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
+            dividend_yield=float(row["dividendYieldUsed"]),
         ),
         axis=1,
     )
@@ -249,6 +275,7 @@ def _build_surface_nodes(
 
         time_to_expiration = float(selected_group["time_to_expiration_years"].iloc[0])
         forward = float(selected_group["forwardPrice"].iloc[0])
+        selected_dividend_yield = float(selected_group["dividendYieldUsed"].iloc[0])
         log_moneyness = float(np.log(float(strike) / forward))
         if abs(log_moneyness) <= SURFACE_ATM_LOG_MONEYNESS_BAND:
             preferred_surface_side = "both"
@@ -263,6 +290,7 @@ def _build_surface_nodes(
                 "strike": float(strike),
                 "time_to_expiration_years": time_to_expiration,
                 "forwardPrice": forward,
+                "dividendYieldUsed": selected_dividend_yield,
                 "callEquivalentPrice": float(
                     np.average(selected_group["callEquivalentPrice"].to_numpy(dtype=float), weights=weights)
                 ),
@@ -293,6 +321,7 @@ def _build_arbitrage_free_surface(
     risk_free_rate: float,
     dividend_yield: float,
     dte_step: int = 1,
+    build_smooth_grid: bool = True,
     ) -> Tuple[Dict[Tuple[int, float], float], np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     surface_nodes = _build_surface_nodes(
         df=df,
@@ -301,7 +330,7 @@ def _build_arbitrage_free_surface(
         dividend_yield=dividend_yield,
     )
     if surface_nodes.empty:
-        raise ValueError("No usable quotes available for unified arbitrage-free surface construction.")
+        raise ValueError("No usable quotes available for static-arbitrage-adjusted surface construction.")
 
     slice_projected_iv: Dict[Tuple[int, float], float] = {}
     slice_data = []
@@ -311,6 +340,7 @@ def _build_arbitrage_free_surface(
         weights = slice_df["surfaceWeight"].to_numpy(dtype=float)
         call_prices = slice_df["callEquivalentPrice"].to_numpy(dtype=float)
         time_to_expiration = float(slice_df["time_to_expiration_years"].iloc[0])
+        slice_dividend_yield = float(slice_df["dividendYieldUsed"].iloc[0])
         projected_prices = _project_call_price_slice(
             strikes=strikes,
             call_prices=call_prices,
@@ -318,7 +348,7 @@ def _build_arbitrage_free_surface(
             spot=underlying_price,
             time_to_expiration=time_to_expiration,
             risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
+            dividend_yield=slice_dividend_yield,
         )
         for strike, projected_price in zip(strikes, projected_prices):
             projected_iv = _implied_volatility(
@@ -328,25 +358,27 @@ def _build_arbitrage_free_surface(
                 time_to_expiration=time_to_expiration,
                 risk_free_rate=risk_free_rate,
                 market_price=float(projected_price),
-                dividend_yield=dividend_yield,
+                dividend_yield=slice_dividend_yield,
             )
             if np.isfinite(projected_iv):
                 slice_projected_iv[(int(days_to_expiration), float(strike))] = float(projected_iv)
 
         if len(strikes) < 2:
             continue
-        forward = _forward_price(
-            spot=underlying_price,
-            time_to_expiration=time_to_expiration,
-            risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-        )
+        forward = float(slice_df["forwardPrice"].iloc[0])
         log_moneyness = np.log(strikes / forward)
+        if (
+            len(strikes) < MIN_SMOOTH_SLICE_NODE_COUNT
+            or float(np.max(log_moneyness) - np.min(log_moneyness))
+            < MIN_SMOOTH_SLICE_LOG_MONEYNESS_WIDTH
+        ):
+            continue
         slice_data.append(
             {
                 "days_to_expiration": int(days_to_expiration),
                 "time_to_expiration_years": time_to_expiration,
                 "forward": forward,
+                "dividend_yield": slice_dividend_yield,
                 "strikes": strikes,
                 "projected_prices": projected_prices,
                 "weights": weights,
@@ -364,7 +396,10 @@ def _build_arbitrage_free_surface(
     surface_nodes = surface_nodes.dropna(subset=["surfaceImpliedVolatility"]).copy()
 
     empty_grid = np.empty((0, 0), dtype=float)
-    if len(slice_data) < 2:
+    if not build_smooth_grid:
+        return slice_projected_iv, empty_grid, empty_grid, empty_grid, surface_nodes
+
+    if len(slice_data) < MIN_SMOOTH_MATURITY_SLICE_COUNT:
         return slice_projected_iv, empty_grid, empty_grid, empty_grid, surface_nodes
 
     k_min = max(float(np.min(item["log_moneyness"])) for item in slice_data)
@@ -375,6 +410,7 @@ def _build_arbitrage_free_surface(
     k_grid = np.linspace(k_min, k_max, ARBITRAGE_K_GRID_SIZE)
     dte_observed = np.array([item["days_to_expiration"] for item in slice_data], dtype=int)
     time_observed = np.array([item["time_to_expiration_years"] for item in slice_data], dtype=float)
+    forward_observed = np.array([item["forward"] for item in slice_data], dtype=float)
 
     total_variance = np.full((len(slice_data), len(k_grid)), np.nan)
     evaluation_weights = np.full((len(slice_data), len(k_grid)), 0.25)
@@ -400,7 +436,7 @@ def _build_arbitrage_free_surface(
                 time_to_expiration=float(item["time_to_expiration_years"]),
                 risk_free_rate=risk_free_rate,
                 market_price=float(interpolated_prices[column_index]),
-                dividend_yield=dividend_yield,
+                dividend_yield=float(item["dividend_yield"]),
             )
             if np.isfinite(implied_volatility):
                 total_variance[row_index, column_index] = float(
@@ -423,7 +459,7 @@ def _build_arbitrage_free_surface(
                         time_to_expiration=float(item["time_to_expiration_years"]),
                         risk_free_rate=risk_free_rate,
                         volatility=float(volatility),
-                        dividend_yield=dividend_yield,
+                        dividend_yield=float(item["dividend_yield"]),
                     )
                     for strike, volatility in zip(evaluation_strikes, row_volatility)
                 ],
@@ -436,7 +472,7 @@ def _build_arbitrage_free_surface(
                 spot=underlying_price,
                 time_to_expiration=float(item["time_to_expiration_years"]),
                 risk_free_rate=risk_free_rate,
-                dividend_yield=dividend_yield,
+                dividend_yield=float(item["dividend_yield"]),
             )
             updated_total_variance = []
             for strike, projected_price in zip(evaluation_strikes, projected_prices):
@@ -447,15 +483,21 @@ def _build_arbitrage_free_surface(
                     time_to_expiration=float(item["time_to_expiration_years"]),
                     risk_free_rate=risk_free_rate,
                     market_price=float(projected_price),
-                    dividend_yield=dividend_yield,
+                    dividend_yield=float(item["dividend_yield"]),
                 )
                 updated_total_variance.append(float(implied_volatility**2 * item["time_to_expiration_years"]))
             total_variance[row_index] = np.array(updated_total_variance, dtype=float)
 
         total_variance = np.maximum.accumulate(total_variance, axis=0)
 
+    dte_step = max(int(dte_step), 1)
     dte_dense = np.arange(int(dte_observed.min()), int(dte_observed.max()) + dte_step, dte_step, dtype=int)
+    observed_max_dte = int(dte_observed.max())
+    if dte_dense[-1] != observed_max_dte:
+        dte_dense = np.append(dte_dense[dte_dense < observed_max_dte], observed_max_dte)
     time_dense = np.interp(dte_dense, dte_observed, time_observed)
+    forward_dense = np.interp(dte_dense, dte_observed, forward_observed)
+    dividend_yield_dense = risk_free_rate - np.log(forward_dense / underlying_price) / time_dense
     total_variance_dense = np.empty((len(dte_dense), len(k_grid)), dtype=float)
     evaluation_weights_dense = np.empty((len(dte_dense), len(k_grid)), dtype=float)
     for column_index in range(len(k_grid)):
@@ -467,14 +509,8 @@ def _build_arbitrage_free_surface(
         )
 
     grid_strike = np.empty((len(dte_dense), len(k_grid)), dtype=float)
-    for row_index, time_to_expiration in enumerate(time_dense):
-        forward = _forward_price(
-            spot=underlying_price,
-            time_to_expiration=float(time_to_expiration),
-            risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-        )
-        grid_strike[row_index] = forward * np.exp(k_grid)
+    for row_index, _ in enumerate(time_dense):
+        grid_strike[row_index] = forward_dense[row_index] * np.exp(k_grid)
 
     for _ in range(ARBITRAGE_PROJECTION_ITERATIONS):
         for row_index, time_to_expiration in enumerate(time_dense):
@@ -491,7 +527,7 @@ def _build_arbitrage_free_surface(
                         time_to_expiration=float(time_to_expiration),
                         risk_free_rate=risk_free_rate,
                         volatility=float(volatility),
-                        dividend_yield=dividend_yield,
+                        dividend_yield=float(dividend_yield_dense[row_index]),
                     )
                     for strike, volatility in zip(grid_strike[row_index], row_volatility)
                 ],
@@ -504,7 +540,7 @@ def _build_arbitrage_free_surface(
                 spot=underlying_price,
                 time_to_expiration=float(time_to_expiration),
                 risk_free_rate=risk_free_rate,
-                dividend_yield=dividend_yield,
+                dividend_yield=float(dividend_yield_dense[row_index]),
             )
             updated_total_variance = []
             for strike, projected_price in zip(grid_strike[row_index], projected_prices):
@@ -515,7 +551,7 @@ def _build_arbitrage_free_surface(
                     time_to_expiration=float(time_to_expiration),
                     risk_free_rate=risk_free_rate,
                     market_price=float(projected_price),
-                    dividend_yield=dividend_yield,
+                    dividend_yield=float(dividend_yield_dense[row_index]),
                 )
                 updated_total_variance.append(float(implied_volatility**2 * time_to_expiration))
             total_variance_dense[row_index] = np.array(updated_total_variance, dtype=float)
@@ -566,7 +602,7 @@ def _build_unified_scatter_trace(surface_nodes: pd.DataFrame) -> go.Scatter3d:
         y=surface_nodes["days_to_expiration"],
         z=surface_nodes["surfaceImpliedVolatility"] * 100.0,
         mode="markers",
-        name="Unified Surface Nodes",
+        name="Adjusted Surface Nodes",
         marker=dict(
             size=5,
             color=surface_nodes["surfaceImpliedVolatility"] * 100.0,
@@ -602,7 +638,7 @@ def _build_surface_trace(
         surfacecolor=z_display,
         colorscale="Viridis",
         opacity=0.80,
-        name="Unified Arbitrage-Free Surface",
+        name="Static-Arbitrage Adjusted Surface",
         showscale=True,
         colorbar=dict(title="IV (%)"),
         hovertemplate=(
@@ -619,18 +655,19 @@ def create_vol_surface(
     underlying_price: float | None = None,
     risk_free_rate: float = 0.02,
     dividend_yield: float = 0.0,
+    dte_range: Tuple[int, int] | None = None,
 ):
     """
     Create an interactive 3D volatility figure.
 
-    - Raw mode: unified arbitrage-adjusted surface nodes.
-    - Smoothed mode: one unified arbitrage-free surface.
+    - Raw mode: unified static-arbitrage-adjusted surface nodes.
+    - Smoothed mode: one unified surface projected onto discrete static no-arbitrage constraints.
     """
     if df is None or df.empty:
         print("No data to plot")
         return go.Figure()
     if underlying_price is None or not np.isfinite(underlying_price) or float(underlying_price) <= 0:
-        print("A positive underlying price is required to build a unified arbitrage-free surface.")
+        print("A positive underlying price is required to build a unified static-arbitrage-adjusted surface.")
         return go.Figure()
 
     working_df = df.copy()
@@ -648,7 +685,7 @@ def create_vol_surface(
         print("No rows left to render after filtering.")
         return go.Figure()
 
-    if "includeInSurface" in working_df.columns:
+    if "includeInSurface" in working_df.columns and not include_low_confidence:
         surface_input_df = working_df[working_df["includeInSurface"].fillna(False).astype(bool)].copy()
     else:
         surface_input_df = working_df.copy()
@@ -657,16 +694,31 @@ def create_vol_surface(
         print("No surface-eligible rows remain after quality filtering.")
         return go.Figure()
 
+    observed_dte_min = int(working_df["days_to_expiration"].min())
+    observed_dte_max = int(working_df["days_to_expiration"].max())
+    dte_axis_range = None
+    if dte_range is not None:
+        requested_min, requested_max = int(dte_range[0]), int(dte_range[1])
+        if requested_min > requested_max:
+            requested_min, requested_max = requested_max, requested_min
+        dte_axis_range = [requested_min, requested_max]
+    else:
+        dte_axis_range = [observed_dte_min, observed_dte_max]
+
+    dte_span = max(dte_axis_range[1] - dte_axis_range[0], observed_dte_max - observed_dte_min, 1)
+    smooth_dte_step = max(1, int(np.ceil(dte_span / max(MAX_SMOOTH_DTE_GRID_POINTS - 1, 1))))
+
     try:
         _, grid_strike, grid_dte, iv_grid, surface_nodes = _build_arbitrage_free_surface(
             df=surface_input_df,
             underlying_price=float(underlying_price),
             risk_free_rate=risk_free_rate,
             dividend_yield=dividend_yield,
-            dte_step=1,
+            dte_step=smooth_dte_step,
+            build_smooth_grid=bool(smooth),
         )
     except Exception as exc:
-        print(f"Unified arbitrage-free surface construction failed: {exc}")
+        print(f"Static-arbitrage-adjusted surface construction failed: {exc}")
         return go.Figure()
 
     if surface_nodes.empty:
@@ -684,30 +736,54 @@ def create_vol_surface(
         )
     else:
         if smooth:
-            print("Not enough stable nodes for a smoothed arbitrage-free surface. Rendering adjusted nodes instead.")
+            print("Not enough stable nodes for a smoothed adjusted surface. Rendering adjusted nodes instead.")
         traces.append(_build_unified_scatter_trace(surface_nodes))
-
-    confidence_suffix = (
-        " | Low-confidence quotes excluded from the surface fit"
-        if include_low_confidence
-        else " | Confidence-filtered"
-    )
-    mode_suffix = "Smoothed" if smooth else "Raw"
 
     fig = go.Figure(data=traces)
     fig.update_layout(
-        title=f"{ticker} Unified Arbitrage-Free Volatility Surface ({mode_suffix}){confidence_suffix}",
+        title=None,
+        paper_bgcolor="#101a2a",
+        plot_bgcolor="#101a2a",
+        font=dict(color="#eeeeea", family="Inter, Segoe UI, Arial, sans-serif"),
         scene=dict(
-            xaxis_title="Strike Price",
-            yaxis_title="Days to Expiration",
-            zaxis_title="Implied Volatility (%)",
+            bgcolor="#101a2a",
+            xaxis=dict(
+                title="Strike Price",
+                backgroundcolor="#0b1421",
+                gridcolor="#2c3b50",
+                zerolinecolor="#516275",
+                color="#eeeeea",
+            ),
+            yaxis=dict(
+                title="Days to Expiration",
+                range=dte_axis_range,
+                backgroundcolor="#0b1421",
+                gridcolor="#2c3b50",
+                zerolinecolor="#516275",
+                color="#eeeeea",
+            ),
+            zaxis=dict(
+                title="Implied Volatility (%)",
+                backgroundcolor="#0b1421",
+                gridcolor="#2c3b50",
+                zerolinecolor="#516275",
+                color="#eeeeea",
+            ),
             camera=dict(
                 up=dict(x=0, y=0, z=1),
                 center=dict(x=0, y=0, z=0),
                 eye=dict(x=1.45, y=1.45, z=1.35),
             ),
         ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
-        margin=dict(l=65, r=50, b=65, t=100),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.01,
+            xanchor="left",
+            x=0.0,
+            font=dict(color="#eeeeea"),
+        ),
+        margin=dict(l=18, r=18, b=18, t=18),
+        autosize=True,
     )
     return fig

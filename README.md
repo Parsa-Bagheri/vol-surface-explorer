@@ -7,7 +7,7 @@ Constructing and analyzing IV surfaces for equity options.
 ## Features
 - Fetch options data from Yahoo Finance with per-expiration snapshot metadata.
 - Compute IV using:
-  - `auto` (default): provider IV with Black-Scholes fallback
+  - `auto` (default): recomputed Black-Scholes IV first, provider IV fallback
   - `yfinance`: provider IV only
   - `black-scholes`: recomputed IV only
 - Use the dividend-adjusted Black-Scholes-Merton formula for repricing and IV inversion.
@@ -21,11 +21,44 @@ Constructing and analyzing IV surfaces for equity options.
   - `volume_zero_or_missing`
   - `low_volume`
   - `wide_spread`
+  - `wide_recompute_spread`
+  - `wide_iv_bid_ask`
+  - `recomputed_iv_unreliable`
+  - `recent_trade_inside_wide_quote`
+  - `last_trade_outside_quote`
 - Build one unified surface from call/put quotes after put-call-parity conversion, with an OTM quote preference at each strike/maturity node.
 - Downweight illiquid contracts and project the fitted surface to satisfy discrete static no-arbitrage constraints.
 - Emit diagnostics (internal validation + optional external benchmark comparison).
 
 ## Usage
+
+### Recommended Setup
+Create a local virtual environment and install the runtime dependencies from `requirements.txt`:
+
+```bash
+python -m venv .venv
+```
+
+On Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+On macOS/Linux:
+
+```bash
+source .venv/bin/activate
+```
+
+Then install dependencies:
+
+```bash
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+The `environment.yml` file is available if you prefer Conda or want a broader local data-science environment with Jupyter.
 
 ### Web App
 ```bash
@@ -36,9 +69,13 @@ Then open `http://127.0.0.1:5000` and use the UI to:
 - enter a ticker
 - move strike-range sliders in percent of spot
 - move DTE min/max sliders
-- switch between `yfinance` IV and recomputed `black-scholes` IV
+- switch between `auto`, `yfinance`, and recomputed `black-scholes` IV
 
 The web UI is built with `Flask` plus server-rendered HTML/CSS/JS so it stays lightweight and reuses the same backend pipeline as the CLI.
+
+### Vercel Deployment
+
+The repository includes `vercel.json`, `.vercelignore`, `api/index.py`, and `requirements.txt` for deploying the Flask app on Vercel. The deployment entrypoint imports the shared Flask app, while `.vercelignore` keeps local caches, tests, and development-only files out of the uploaded deployment bundle.
 
 ### Basic Usage (Auto IV + Quality Metadata)
 ```bash
@@ -66,15 +103,15 @@ python main.py TICKER --smooth --dte_max 60 --quality_mode lenient --diagnostics
 - `--risk_free_rate`: Annualized risk-free rate for Black-Scholes. Default: `0.02`.
 - `--dividend_yield`: Continuous dividend yield for Black-Scholes. Default: `0.0`.
 - `--quality_mode {strict,balanced,lenient}`: Surface-inclusion confidence profile. Default: `lenient`.
-- `--max_trade_age_hours`: Last-trade recency threshold for fallback pricing. Default: `72`.
+- `--max_trade_age_hours`: Last-trade recency threshold for fallback pricing. Default: `120`.
 - `--diagnostics_json`: Optional path for diagnostics JSON output.
 - `--benchmark_csv`: Optional CSV for external IV comparison.
-- `--include_low_confidence`: Keep low-confidence rows in diagnostics output, but not in the arbitrage-free surface fit.
+- `--include_low_confidence`: Include low-confidence rows in the surface fit instead of using the default confidence filter.
 
 ## Diagnostics
 Each run computes:
 - Flag counts and exclusion reasons
-- IV source usage split and fallback fraction
+- IV source usage split
 - Per-DTE confidence summary
 - Internal repricing validation (MAE/RMSE against selected market prices)
 
@@ -92,8 +129,14 @@ CSV must include:
 
 ## Notes on Surface Accuracy
 - `auto` mode suppresses provider IV placeholders (for example `0.00001`) by recomputing IV from prices when possible.
+- Recomputed Black-Scholes IV is the first choice in `auto` mode when the selected option price is reliable enough to define a point estimate. Very wide bid/ask quotes, one-sided quotes, stale last prices, and wide bid/ask-implied-IV intervals are retained for diagnostics but excluded from the recomputed-IV surface fit.
+- If Yahoo Finance's provider IV fields look valid but a reliable quote-derived IV cannot be computed, `auto` may fall back to provider IV and marks that row with provider/quote quality flags. Use explicit `yfinance` mode only when you want to inspect the provider IV surface directly.
+- Expiration times are evaluated at the standard 4pm New York option close, including daylight-saving transitions. The requested DTE range controls the plot axis and fetch filter, but the app does not invent expirations; if XLY only has listed expirations at 12, 19, 26, 33, and 39 DTE inside a 7-60 request, those are the only maturities with plotted quotes.
 - The Yahoo Finance provider IV fields for calls and puts at the same strike and expiry are not guaranteed to be parity-consistent, so the plotted surface is not built by linearly joining raw provider-IV points.
+- The forward used for moneyness, put-call conversion, and recomputed IV is estimated by expiry from put-call parity when enough paired quotes are available; otherwise it falls back to the configured dividend yield.
+- The selected IV source drives the surface input. In `black-scholes` mode, IV is inverted from the selected quote price and repriced through Black-Scholes-Merton before projection. In `auto` mode, the same quote-derived IV is preferred whenever it passes reliability checks, with provider IV used only as fallback. In `yfinance` mode, the provider IV is repriced through the same model before projection, so provider and recomputed-IV surfaces can be compared directly.
+- The implementation is not an SVI calibration. It uses direct static no-arbitrage projection on call-equivalent prices and interpolated total variance.
 - The surface uses a single smile/surface, not separate call and put surfaces. At each node the fit prefers out-of-the-money puts below the forward and out-of-the-money calls above the forward, which is standard market practice because those quotes are usually more liquid and less distorted.
-- In smoothed mode, the rendered surface is projected to be free of discrete static arbitrage: call-equivalent price slices are enforced to be monotone and convex in strike (no butterfly arbitrage), and total variance is enforced to be non-decreasing in maturity on an overlapping log-forward-moneyness grid (no calendar arbitrage).
+- In smoothed mode, the rendered surface is projected to remove discrete static arbitrage on the construction grid: call-equivalent price slices are enforced to be monotone and convex in strike (no butterfly arbitrage), and total variance is enforced to be non-decreasing in maturity on an overlapping log-forward-moneyness grid (calendar-spread control).
 - If there are not enough stable nodes to build the smoothed surface, the app falls back to rendering the adjusted raw surface nodes.
 - Low-confidence rows are retained for diagnostics but excluded from surfaces by default.

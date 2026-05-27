@@ -5,157 +5,168 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Volatility Surface Explorer</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
 <body>
-  <div class="page-shell">
-    <aside class="control-panel">
-      <div class="brand-block">
-        <p class="eyebrow">Unified Arbitrage-Free Surface</p>
-        <h1>Volatility Surface Explorer</h1>
-        <p class="subtitle">Lightweight web UI for the existing pricing and arbitrage-cleaning pipeline.</p>
-      </div>
+  <div class="app-shell">
+    <header class="app-header">
+      <h1>Volatility Surface Explorer</h1>
+    </header>
 
-      <form method="get" action="/" class="control-form">
-        <label class="field-group">
-          <span>Ticker</span>
-          <input type="text" name="ticker" value="{{ values.ticker }}" placeholder="AAPL" maxlength="12" autocomplete="off">
-        </label>
+    <form method="get" action="/" class="control-form">
+      <label class="field-group ticker-field">
+        <span>Ticker</span>
+        <input type="text" name="ticker" value="{{ values.ticker }}" placeholder="SPY" maxlength="12" autocomplete="off">
+      </label>
 
-        <div class="field-group">
-          <div class="field-heading">
-            <span>Strike Range</span>
-            <strong><span id="strike-min-output">{{ values.strike_min_pct }}</span>% to <span id="strike-max-output">{{ values.strike_max_pct }}</span>%</strong>
+      <section class="field-group range-control" data-range-control data-min-gap="1">
+        <div class="field-heading">
+          <span>Strike Range</span>
+          <div class="range-values" aria-label="Strike range values">
+            <input class="range-number" id="strike-min-value" name="strike_min_pct" type="number" min="50" max="150" step="1" value="{{ values.strike_min_pct }}" aria-label="Minimum strike percent">
+            <span>% to</span>
+            <input class="range-number" id="strike-max-value" name="strike_max_pct" type="number" min="50" max="150" step="1" value="{{ values.strike_max_pct }}" aria-label="Maximum strike percent">
+            <span>%</span>
           </div>
-          <input type="range" id="strike-min" name="strike_min_pct" min="50" max="100" step="1" value="{{ values.strike_min_pct }}">
-          <input type="range" id="strike-max" name="strike_max_pct" min="100" max="150" step="1" value="{{ values.strike_max_pct }}">
         </div>
+        <div class="dual-range" style="--range-min: 0%; --range-max: 100%;">
+          <div class="range-track"><span class="range-fill"></span></div>
+          <input class="range-thumb range-thumb-min" id="strike-min" type="range" min="50" max="150" step="1" value="{{ values.strike_min_pct }}" aria-label="Minimum strike percent slider">
+          <input class="range-thumb range-thumb-max" id="strike-max" type="range" min="50" max="150" step="1" value="{{ values.strike_max_pct }}" aria-label="Maximum strike percent slider">
+        </div>
+      </section>
 
-        <div class="field-group">
-          <div class="field-heading">
-            <span>DTE Range</span>
-            <strong><span id="dte-min-output">{{ values.dte_min }}</span> to <span id="dte-max-output">{{ values.dte_max }}</span> days</strong>
+      <section class="field-group range-control" data-range-control data-min-gap="1">
+        <div class="field-heading">
+          <span>DTE Range</span>
+          <div class="range-values" aria-label="DTE range values">
+            <input class="range-number" id="dte-min-value" name="dte_min" type="number" min="1" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum days to expiration">
+            <span>to</span>
+            <input class="range-number" id="dte-max-value" name="dte_max" type="number" min="1" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum days to expiration">
+            <span>days</span>
           </div>
-          <input type="range" id="dte-min" name="dte_min" min="1" max="180" step="1" value="{{ values.dte_min }}">
-          <input type="range" id="dte-max" name="dte_max" min="1" max="365" step="1" value="{{ values.dte_max }}">
         </div>
+        <div class="dual-range" style="--range-min: 0%; --range-max: 100%;">
+          <div class="range-track"><span class="range-fill"></span></div>
+          <input class="range-thumb range-thumb-min" id="dte-min" type="range" min="1" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum DTE slider">
+          <input class="range-thumb range-thumb-max" id="dte-max" type="range" min="1" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum DTE slider">
+        </div>
+      </section>
 
-        <label class="field-group">
-          <span>IV Source</span>
-          <select name="iv_source">
-            <option value="black-scholes" {% if values.iv_source == 'black-scholes' %}selected{% endif %}>Black-Scholes recomputed IV</option>
-            <option value="yfinance" {% if values.iv_source == 'yfinance' %}selected{% endif %}>Yahoo Finance provider IV</option>
-          </select>
-        </label>
+      <label class="field-group compact-field">
+        <span>IV Source</span>
+        <select name="iv_source">
+          <option value="auto" {% if values.iv_source == 'auto' %}selected{% endif %}>Auto IV</option>
+          <option value="black-scholes" {% if values.iv_source == 'black-scholes' %}selected{% endif %}>Black-Scholes</option>
+          <option value="yfinance" {% if values.iv_source == 'yfinance' %}selected{% endif %}>Yahoo IV</option>
+        </select>
+      </label>
 
-        <label class="toggle-row">
-          <input type="checkbox" name="smooth" value="1" {% if values.smooth %}checked{% endif %}>
-          <span>Show smoothed arbitrage-free surface</span>
-        </label>
+      <label class="toggle-row">
+        <input type="hidden" name="smooth" value="0">
+        <input type="checkbox" name="smooth" value="1" {% if values.smooth %}checked{% endif %}>
+        <span>Smoothed</span>
+      </label>
 
-        <button type="submit" class="primary-button">Build Surface</button>
-      </form>
-
-      <div class="notes-card">
-        <h2>Method</h2>
-        <p>The app fits one unified surface, not separate call and put surfaces. It prefers OTM puts below the forward and OTM calls above the forward, then enforces discrete static no-arbitrage.</p>
-      </div>
-    </aside>
+      <button type="submit" class="primary-button">
+        <span class="button-ready">Build Surface</span>
+        <span class="button-loading">Building Surface</span>
+      </button>
+    </form>
 
     <main class="content-panel">
       {% if error_message %}
         <section class="message-card error-card">
-          <h2>Couldn’t build the surface</h2>
+          <h2>Could not build the surface</h2>
           <p>{{ error_message }}</p>
-        </section>
-      {% endif %}
-
-      {% if cards %}
-        <section class="card-grid">
-          {% for card in cards %}
-            <article class="metric-card">
-              <p>{{ card.label }}</p>
-              <strong>{{ card.value }}</strong>
-            </article>
-          {% endfor %}
         </section>
       {% endif %}
 
       {% if plot_html %}
         <section class="surface-card">
           <div class="surface-header">
-            <div>
-              <p class="eyebrow">Interactive Plot</p>
-              <h2>{{ values.ticker }} surface</h2>
-            </div>
-            <p class="surface-meta">Source: {{ values.iv_source }}</p>
+            <h2>{{ values.ticker }} surface</h2>
+            {% if surface_cards %}
+              <div class="surface-metrics" aria-label="Surface summary">
+                {% for card in surface_cards %}
+                  <div class="surface-metric">
+                    <span>{{ card.label }}</span>
+                    <strong>{{ card.value }}</strong>
+                  </div>
+                {% endfor %}
+              </div>
+            {% endif %}
           </div>
-          <div class="plot-wrapper">{{ plot_html|safe }}</div>
+          <div class="plot-wrapper">
+            {{ plot_html|safe }}
+            <div class="plot-loading-overlay" role="status" aria-live="polite" aria-hidden="true">
+              <div class="loading-spinner" aria-hidden="true"></div>
+              <p>Building surface</p>
+            </div>
+          </div>
         </section>
       {% elif not error_message %}
         <section class="message-card empty-card">
-          <h2>Ready when you are</h2>
-          <p>Enter a ticker, adjust the strike and DTE sliders, and build a surface.</p>
+          <h2>Enter a ticker to build a surface</h2>
         </section>
       {% endif %}
 
+      <section class="surface-card loading-surface-card" aria-hidden="true">
+        <div class="surface-header">
+          <h2><span data-loading-ticker>{{ values.ticker or "Surface" }}</span> surface</h2>
+        </div>
+        <div class="plot-wrapper loading-plot-shell">
+          <div class="plot-loading-placeholder" role="status" aria-live="polite" aria-hidden="true">
+            <div class="loading-spinner" aria-hidden="true"></div>
+            <p>Building surface</p>
+          </div>
+        </div>
+      </section>
+
       {% if diagnostics %}
-        <section class="diagnostics-grid">
-          <article class="diagnostics-card">
-            <h2>Quality Summary</h2>
-            <ul>
-              <li>Retained rows: {{ diagnostics.rows_retained }}</li>
-              <li>Surface rows: {{ diagnostics.rows_surface_included }}</li>
-              <li>Excluded rows: {{ diagnostics.rows_surface_excluded }}</li>
-              <li>Fallback IV share: {{ '%.1f'|format(100 * diagnostics.fallback_iv_fraction) }}%</li>
-            </ul>
-          </article>
-          <article class="diagnostics-card">
-            <h2>Flag Counts</h2>
-            <ul>
-              {% for flag, count in diagnostics.flag_counts|dictsort %}
-                <li>{{ flag }}: {{ count }}</li>
-              {% else %}
-                <li>No flags recorded.</li>
-              {% endfor %}
-            </ul>
-          </article>
-        </section>
+        <details class="advanced-panel">
+          <summary>
+            <span>Advanced info</span>
+            <small>rows, sources, quality flags</small>
+          </summary>
+
+          <div class="advanced-content">
+            {% if advanced_cards %}
+              <section class="advanced-metrics" aria-label="Advanced metrics">
+                {% for card in advanced_cards %}
+                  <div class="advanced-metric">
+                    <span>{{ card.label }}</span>
+                    <strong>{{ card.value }}</strong>
+                  </div>
+                {% endfor %}
+              </section>
+            {% endif %}
+
+            <section class="diagnostics-grid">
+              <article class="diagnostics-panel">
+                <h2>Quality Summary</h2>
+                <ul>
+                  <li>Retained rows: {{ diagnostics.rows_retained }}</li>
+                  <li>Surface rows: {{ diagnostics.rows_surface_included }}</li>
+                  <li>Excluded rows: {{ diagnostics.rows_surface_excluded }}</li>
+                  <li>Quote-derived IV share: {{ '%.1f'|format(100 * (diagnostics.black_scholes_iv_fraction|default(0))) }}%</li>
+                </ul>
+              </article>
+              <article class="diagnostics-panel">
+                <h2>Flag Counts</h2>
+                <ul>
+                  {% for flag, count in diagnostics.flag_counts|dictsort %}
+                    <li>{{ flag }}: {{ count }}</li>
+                  {% else %}
+                    <li>No flags recorded.</li>
+                  {% endfor %}
+                </ul>
+              </article>
+            </section>
+          </div>
+        </details>
       {% endif %}
     </main>
   </div>
-
-  <script>
-    const pairs = [
-      { minId: 'strike-min', maxId: 'strike-max', minOutputId: 'strike-min-output', maxOutputId: 'strike-max-output' },
-      { minId: 'dte-min', maxId: 'dte-max', minOutputId: 'dte-min-output', maxOutputId: 'dte-max-output' },
-    ];
-
-    for (const pair of pairs) {
-      const minInput = document.getElementById(pair.minId);
-      const maxInput = document.getElementById(pair.maxId);
-      const minOutput = document.getElementById(pair.minOutputId);
-      const maxOutput = document.getElementById(pair.maxOutputId);
-
-      const syncValues = (source) => {
-        let minValue = Number(minInput.value);
-        let maxValue = Number(maxInput.value);
-        if (minValue > maxValue) {
-          if (source === minInput) {
-            maxValue = minValue;
-            maxInput.value = String(maxValue);
-          } else {
-            minValue = maxValue;
-            minInput.value = String(minValue);
-          }
-        }
-        minOutput.textContent = String(minValue);
-        maxOutput.textContent = String(maxValue);
-      };
-
-      minInput.addEventListener('input', () => syncValues(minInput));
-      maxInput.addEventListener('input', () => syncValues(maxInput));
-      syncValues(minInput);
-    }
-  </script>
 </body>
 </html>

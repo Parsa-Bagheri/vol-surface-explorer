@@ -221,7 +221,7 @@ def main():
     parser.add_argument(
         "--max_trade_age_hours",
         type=float,
-        default=72.0,
+        default=120.0,
         help="Max age for last-trade fallback pricing before stale flagging.",
     )
     parser.add_argument(
@@ -281,7 +281,7 @@ def main():
     print(f"DTE range: {args.dte_min} to {args.dte_max} days")
     print(f"IV source: {args.iv_source}")
     print(f"Quality mode: {args.quality_mode}")
-    print("Surface construction: unified call/put arbitrage-free surface")
+    print("Surface construction: unified call/put static-arbitrage-adjusted surface")
     print(f"Fetched {len(raw_options_df)} raw option contracts initially.")
     print(f"Prepared {len(cleaned_options_df)} option contracts with quality metadata.")
 

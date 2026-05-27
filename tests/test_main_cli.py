@@ -62,6 +62,8 @@ def test_main_cli_generates_html_and_diagnostics(tmp_path, monkeypatch):
             "rows_retained": len(cleaned_df),
             "rows_surface_included": len(cleaned_df),
             "rows_surface_excluded": 0,
+            "black_scholes_iv_fraction": 0.0,
+            "provider_iv_fraction": 0.0,
             "fallback_iv_fraction": 0.0,
         }
         return SurfaceBuildResult(
