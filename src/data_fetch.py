@@ -1,8 +1,11 @@
 import time
 from typing import Dict, Optional
 
+import numpy as np
 import pandas as pd
 import yfinance as yf
+
+from src.time_utils import expiration_close_utc, expiration_dte, normalize_as_of_utc
 
 
 IV_PLACEHOLDER_THRESHOLD = 1e-4
@@ -69,12 +72,19 @@ def _compute_chain_health(
     }
 
 
+def _expiration_dte(expiration_date: str, now_utc: pd.Timestamp) -> Optional[int]:
+    return expiration_dte(expiration_date, now_utc)
+
+
 def get_options_data(
     ticker_symbol: str,
     retry_on_poor_quality: bool = True,
     max_fetch_attempts: int = 2,
     poor_quality_zero_quote_ratio: float = 0.97,
     retry_wait_seconds: float = 0.75,
+    min_dte: Optional[int] = None,
+    max_dte: Optional[int] = None,
+    as_of_utc: Optional[pd.Timestamp] = None,
 ) -> pd.DataFrame:
     """
     Fetches all available call and put options data for a given stock ticker.
@@ -94,7 +104,50 @@ def get_options_data(
 
     print(f"Fetching options for {ticker_symbol} for {len(available_dates)} expiration dates...")
 
+    now_utc = normalize_as_of_utc(as_of_utc)
+    available_expirations = []
+    selected_dates = []
+    selected_dte_by_date = {}
     for date in available_dates:
+        expiration_days = _expiration_dte(date, now_utc)
+        available_expirations.append(
+            {
+                "expiration": date,
+                "days_to_expiration": expiration_days,
+            }
+        )
+        if expiration_days is None or expiration_days <= 0:
+            continue
+        if min_dte is not None and expiration_days < int(min_dte):
+            continue
+        if max_dte is not None and expiration_days > int(max_dte):
+            continue
+        selected_dates.append(date)
+        selected_dte_by_date[date] = expiration_days
+
+    if not selected_dates:
+        print(f"No option expiration dates matched the requested DTE range for {ticker_symbol}.")
+        empty_df = pd.DataFrame()
+        empty_df.attrs["fetchDiagnostics"] = {
+            "ticker": ticker_symbol,
+            "expirations_available": len(available_dates),
+            "expirations_requested": 0,
+            "expirations_fetched": 0,
+            "expirations_flagged_poor_quality": 0,
+            "max_attempt_used": 0,
+            "as_of_utc": now_utc.isoformat(),
+            "available_expirations": available_expirations,
+            "selected_expirations": [],
+            "details": [],
+        }
+        return empty_df
+
+    print(
+        f"Fetching {len(selected_dates)} filtered expiration dates for {ticker_symbol} "
+        f"from {len(available_dates)} available dates."
+    )
+
+    for date in selected_dates:
         try:
             chosen_calls = None
             chosen_puts = None
@@ -135,6 +188,8 @@ def get_options_data(
             if not chosen_calls.empty:
                 chosen_calls["expirationDate"] = pd.to_datetime(date)
                 chosen_calls["optionType"] = "call"
+                chosen_calls["expirationCloseUtc"] = expiration_close_utc(date)
+                chosen_calls["expirationDteAtFetch"] = selected_dte_by_date.get(date)
                 chosen_calls["snapshotTimestampUtc"] = chosen_health[
                     "snapshot_timestamp_utc"
                 ]
@@ -155,6 +210,8 @@ def get_options_data(
             if not chosen_puts.empty:
                 chosen_puts["expirationDate"] = pd.to_datetime(date)
                 chosen_puts["optionType"] = "put"
+                chosen_puts["expirationCloseUtc"] = expiration_close_utc(date)
+                chosen_puts["expirationDteAtFetch"] = selected_dte_by_date.get(date)
                 chosen_puts["snapshotTimestampUtc"] = chosen_health[
                     "snapshot_timestamp_utc"
                 ]
@@ -193,10 +250,20 @@ def get_options_data(
         max_attempt_used = max(item.get("attempt", 1) for item in fetch_diagnostics)
         combined_options_df.attrs["fetchDiagnostics"] = {
             "ticker": ticker_symbol,
-            "expirations_requested": len(available_dates),
+            "expirations_available": len(available_dates),
+            "expirations_requested": len(selected_dates),
             "expirations_fetched": len(fetch_diagnostics),
             "expirations_flagged_poor_quality": poor_quality_count,
             "max_attempt_used": max_attempt_used,
+            "as_of_utc": now_utc.isoformat(),
+            "available_expirations": available_expirations,
+            "selected_expirations": [
+                {
+                    "expiration": date,
+                    "days_to_expiration": selected_dte_by_date.get(date),
+                }
+                for date in selected_dates
+            ],
             "details": fetch_diagnostics,
         }
 

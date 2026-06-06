@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+import re
 from typing import Any, Dict
 
 import pandas as pd
@@ -11,7 +13,19 @@ from src.data_cleaner import (
     prepare_options_data,
 )
 from src.data_fetch import get_current_price, get_options_data
-from src.visualizer import create_vol_surface
+from src.time_utils import normalize_as_of_utc
+from src.visualizer import build_static_arbitrage_report, create_vol_surface
+
+
+TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
+VALID_IV_SOURCES = {"auto", "yfinance", "black-scholes"}
+VALID_QUALITY_MODES = {"strict", "balanced", "lenient"}
+MIN_STRIKE_PCT = 0.50
+MAX_STRIKE_PCT = 1.50
+MIN_DTE = 1
+MAX_DTE = 365
+MIN_MAX_TRADE_AGE_HOURS = 1.0
+MAX_MAX_TRADE_AGE_HOURS = 24.0 * 14.0
 
 
 @dataclass(frozen=True)
@@ -40,17 +54,42 @@ class SurfaceBuildResult:
     figure: Any
 
 
-def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
-    ticker = (request.ticker or "").strip().upper()
-    if not ticker:
+def validate_ticker_symbol(ticker: str) -> str:
+    normalized = (ticker or "").strip().upper()
+    if not normalized:
         raise ValueError("A ticker symbol is required.")
+    if not TICKER_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Ticker symbols may only contain letters, numbers, dots, and hyphens, "
+            "and must be 12 characters or fewer."
+        )
+    return normalized
 
-    strike_min_pct = float(request.strike_min_pct)
-    strike_max_pct = float(request.strike_max_pct)
+
+def _finite_float(name: str, value: float) -> float:
+    try:
+        converted = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number.") from exc
+    if not math.isfinite(converted):
+        raise ValueError(f"{name} must be a finite number.")
+    return converted
+
+
+def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
+    ticker = validate_ticker_symbol(request.ticker)
+
+    strike_min_pct = _finite_float("strike_min_pct", request.strike_min_pct)
+    strike_max_pct = _finite_float("strike_max_pct", request.strike_max_pct)
     if strike_min_pct <= 0 or strike_max_pct <= 0:
         raise ValueError("Strike percentage bounds must be positive.")
     if strike_min_pct > strike_max_pct:
         strike_min_pct, strike_max_pct = strike_max_pct, strike_min_pct
+    if strike_min_pct < MIN_STRIKE_PCT or strike_max_pct > MAX_STRIKE_PCT:
+        raise ValueError(
+            f"Strike percentage bounds must stay between {MIN_STRIKE_PCT:.0%} "
+            f"and {MAX_STRIKE_PCT:.0%} of spot."
+        )
 
     dte_min = int(request.dte_min)
     dte_max = int(request.dte_max)
@@ -58,6 +97,32 @@ def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
         raise ValueError("DTE bounds must be at least 1 day.")
     if dte_min > dte_max:
         dte_min, dte_max = dte_max, dte_min
+    if dte_min < MIN_DTE or dte_max > MAX_DTE:
+        raise ValueError(f"DTE bounds must stay between {MIN_DTE} and {MAX_DTE} days.")
+
+    iv_source = str(request.iv_source or "").strip().lower()
+    if iv_source not in VALID_IV_SOURCES:
+        raise ValueError("Invalid IV source.")
+
+    quality_mode = str(request.quality_mode or "").strip().lower()
+    if quality_mode not in VALID_QUALITY_MODES:
+        raise ValueError("Invalid quality mode.")
+
+    risk_free_rate = _finite_float("risk_free_rate", request.risk_free_rate)
+    dividend_yield = _finite_float("dividend_yield", request.dividend_yield)
+    if not -1.0 <= risk_free_rate <= 1.0:
+        raise ValueError("risk_free_rate must stay between -1.0 and 1.0.")
+    if not -1.0 <= dividend_yield <= 1.0:
+        raise ValueError("dividend_yield must stay between -1.0 and 1.0.")
+
+    max_trade_age_hours = _finite_float(
+        "max_trade_age_hours", request.max_trade_age_hours
+    )
+    if not MIN_MAX_TRADE_AGE_HOURS <= max_trade_age_hours <= MAX_MAX_TRADE_AGE_HOURS:
+        raise ValueError(
+            "max_trade_age_hours must stay between "
+            f"{MIN_MAX_TRADE_AGE_HOURS:.0f} and {MAX_MAX_TRADE_AGE_HOURS:.0f}."
+        )
 
     return SurfaceRequest(
         ticker=ticker,
@@ -66,17 +131,81 @@ def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
         dte_min=dte_min,
         dte_max=dte_max,
         smooth=bool(request.smooth),
-        iv_source=request.iv_source,
-        risk_free_rate=float(request.risk_free_rate),
-        dividend_yield=float(request.dividend_yield),
-        quality_mode=request.quality_mode,
-        max_trade_age_hours=float(request.max_trade_age_hours),
+        iv_source=iv_source,
+        risk_free_rate=risk_free_rate,
+        dividend_yield=dividend_yield,
+        quality_mode=quality_mode,
+        max_trade_age_hours=max_trade_age_hours,
         include_low_confidence=bool(request.include_low_confidence),
     )
 
 
+def _build_dte_coverage_report(
+    diagnostics: Dict[str, Any],
+    request: SurfaceRequest,
+) -> Dict[str, Any]:
+    fetch_diagnostics = diagnostics.get("fetch", {}) or {}
+    selected_expirations = fetch_diagnostics.get("selected_expirations", []) or []
+    available_expirations = fetch_diagnostics.get("available_expirations", []) or []
+
+    selected_dtes = sorted(
+        int(item["days_to_expiration"])
+        for item in selected_expirations
+        if item.get("days_to_expiration") is not None
+    )
+    available_dtes = sorted(
+        int(item["days_to_expiration"])
+        for item in available_expirations
+        if item.get("days_to_expiration") is not None
+    )
+    available_after_max = [dte for dte in available_dtes if dte > request.dte_max]
+    selected_max = selected_dtes[-1] if selected_dtes else None
+    next_after_max = available_after_max[0] if available_after_max else None
+
+    notes = []
+    if selected_max is None:
+        notes.append("No listed expirations matched the requested DTE window.")
+    elif selected_max < request.dte_max:
+        if next_after_max is not None:
+            notes.append(
+                "No listed expiration exists between "
+                f"{selected_max} and requested max {request.dte_max} DTE; "
+                f"next available is {next_after_max} DTE."
+            )
+        else:
+            notes.append(
+                "No later listed expiration is available from the data provider."
+            )
+
+    surface_dte_max = diagnostics.get("surface_dte_max")
+    observed_dte_max = diagnostics.get("observed_dte_max")
+    if (
+        surface_dte_max is not None
+        and observed_dte_max is not None
+        and int(surface_dte_max) < int(observed_dte_max)
+    ):
+        notes.append(
+            "Later fetched expirations exist, but quality filtering removed them from the surface."
+        )
+
+    return {
+        "requested_min": int(request.dte_min),
+        "requested_max": int(request.dte_max),
+        "selected_min": selected_dtes[0] if selected_dtes else None,
+        "selected_max": selected_max,
+        "selected_dtes": selected_dtes,
+        "observed_min": diagnostics.get("observed_dte_min"),
+        "observed_max": observed_dte_max,
+        "surface_min": diagnostics.get("surface_dte_min"),
+        "surface_max": surface_dte_max,
+        "next_available_after_requested_max": next_after_max,
+        "notes": notes,
+    }
+
+
 def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
     validated_request = _validated_request(request)
+    valuation_time_utc = normalize_as_of_utc()
 
     current_price = get_current_price(validated_request.ticker)
     if current_price is None:
@@ -87,7 +216,12 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
     min_strike_abs = current_price * validated_request.strike_min_pct
     max_strike_abs = current_price * validated_request.strike_max_pct
 
-    raw_options_df = get_options_data(validated_request.ticker)
+    raw_options_df = get_options_data(
+        validated_request.ticker,
+        min_dte=validated_request.dte_min,
+        max_dte=validated_request.dte_max,
+        as_of_utc=valuation_time_utc,
+    )
     if raw_options_df.empty:
         raise ValueError(
             f"No options data was returned for {validated_request.ticker}."
@@ -106,6 +240,7 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         dividend_yield=validated_request.dividend_yield,
         quality_mode=validated_request.quality_mode,
         max_trade_age_hours=validated_request.max_trade_age_hours,
+        as_of_utc=valuation_time_utc,
     )
 
     if cleaned_options_df.empty:
@@ -121,6 +256,8 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         "ticker": validated_request.ticker,
         "strike_min_pct": validated_request.strike_min_pct,
         "strike_max_pct": validated_request.strike_max_pct,
+        "strike_min_abs": float(min_strike_abs),
+        "strike_max_abs": float(max_strike_abs),
         "dte_min": validated_request.dte_min,
         "dte_max": validated_request.dte_max,
         "iv_source": validated_request.iv_source,
@@ -128,13 +265,28 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         "max_trade_age_hours": validated_request.max_trade_age_hours,
         "smooth": bool(validated_request.smooth),
         "include_low_confidence": bool(validated_request.include_low_confidence),
+        "valuation_time_utc": valuation_time_utc.isoformat(),
     }
     diagnostics["fetch"] = raw_options_df.attrs.get("fetchDiagnostics", {})
+    diagnostics["dte_coverage"] = _build_dte_coverage_report(
+        diagnostics,
+        validated_request,
+    )
     diagnostics["internal_validation"] = build_internal_validation_report(
         cleaned_options_df,
         underlying_price=current_price,
         risk_free_rate=validated_request.risk_free_rate,
         dividend_yield=validated_request.dividend_yield,
+        dte_range=(validated_request.dte_min, validated_request.dte_max),
+    )
+    diagnostics["static_arbitrage"] = build_static_arbitrage_report(
+        cleaned_options_df,
+        underlying_price=current_price,
+        risk_free_rate=validated_request.risk_free_rate,
+        dividend_yield=validated_request.dividend_yield,
+        smooth=validated_request.smooth,
+        include_low_confidence=validated_request.include_low_confidence,
+        dte_range=(validated_request.dte_min, validated_request.dte_max),
     )
 
     figure = create_vol_surface(
@@ -145,6 +297,8 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         underlying_price=current_price,
         risk_free_rate=validated_request.risk_free_rate,
         dividend_yield=validated_request.dividend_yield,
+        dte_range=(validated_request.dte_min, validated_request.dte_max),
+        strike_range=(min_strike_abs, max_strike_abs),
     )
 
     return SurfaceBuildResult(

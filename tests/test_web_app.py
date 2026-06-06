@@ -9,9 +9,15 @@ def _build_result(request: SurfaceRequest) -> SurfaceBuildResult:
     figure = go.Figure()
     figure.add_scatter(x=[1, 2], y=[1, 2])
     diagnostics = {
+        "request": {
+            "dte_min": request.dte_min,
+            "dte_max": request.dte_max,
+        },
         "rows_retained": 12,
         "rows_surface_included": 8,
         "rows_surface_excluded": 4,
+        "surface_dte_min": 14,
+        "surface_dte_max": 68,
         "fallback_iv_fraction": 0.25,
         "flag_counts": {"low_volume": 2},
         "internal_validation": {"repricing_mae": 0.1234},
@@ -34,7 +40,11 @@ def test_index_renders_empty_state():
 
     assert response.status_code == 200
     assert b"Volatility Surface Explorer" in response.data
+    assert b"Lightweight web UI for visualizing and exploring implied volatility surfaces of equity options" in response.data
+    assert b"Unified Arbitrage-Free Surface" not in response.data
     assert b"Ready when you are" in response.data
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
 
 
 def test_index_builds_surface_from_query_params():
@@ -54,6 +64,8 @@ def test_index_builds_surface_from_query_params():
     assert response.status_code == 200
     assert b"TSLA surface" in response.data
     assert b"plotly-graph-div" in response.data
+    assert b"Requested DTE" in response.data
+    assert b"Included DTE" in response.data
     assert captured["request"].ticker == "TSLA"
     assert captured["request"].strike_min_pct == 0.85
     assert captured["request"].strike_max_pct == 1.2
@@ -75,3 +87,13 @@ def test_index_shows_error_state_when_surface_build_fails():
     assert response.status_code == 200
     assert b"build the surface" in response.data
     assert b"No suitable options remained after filtering." in response.data
+
+
+def test_index_rejects_invalid_ticker_before_fetching():
+    app = create_app()
+    client = app.test_client()
+
+    response = client.get("/?ticker=%3Cscript%3E")
+
+    assert response.status_code == 200
+    assert b"Ticker symbols may only contain" in response.data

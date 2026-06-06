@@ -1,0 +1,10 @@
+.git
+.pytest_cache
+.ruff_cache
+.vscode
+__pycache__
+**/__pycache__
+**/*.pyc
+*_vol_surface_*.html
+tests
+environment.yml

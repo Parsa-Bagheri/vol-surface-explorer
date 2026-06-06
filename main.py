@@ -116,11 +116,15 @@ def _print_diagnostics_summary(diagnostics: Dict[str, Any]) -> None:
     rows_retained = diagnostics.get("rows_retained", 0)
     rows_included = diagnostics.get("rows_surface_included", 0)
     rows_excluded = diagnostics.get("rows_surface_excluded", 0)
-    fallback_fraction = diagnostics.get("fallback_iv_fraction", 0.0) or 0.0
+    quote_derived_fraction = (
+        diagnostics.get("quote_derived_iv_fraction", diagnostics.get("fallback_iv_fraction", 0.0))
+        or 0.0
+    )
     print(
         "Diagnostics summary: "
         f"retained={rows_retained}, included={rows_included}, excluded={rows_excluded}, "
-        f"fallback_iv_fraction={fallback_fraction:.3f}"
+        f"quote_derived_iv_fraction={quote_derived_fraction:.3f}, "
+        f"surface_strikes={diagnostics.get('surface_strike_min')}-{diagnostics.get('surface_strike_max')}"
     )
 
     flag_counts = diagnostics.get("flag_counts", {})
@@ -138,6 +142,27 @@ def _print_diagnostics_summary(diagnostics: Dict[str, Any]) -> None:
             "Internal validation: "
             f"rows_with_market_price={rows_market}, repricing_mae={mae}, repricing_rmse={rmse}"
         )
+
+    static_arbitrage = diagnostics.get("static_arbitrage", {})
+    if static_arbitrage:
+        projection = static_arbitrage.get("projection", {})
+        print(
+            "Static arbitrage diagnostics: "
+            f"scope={static_arbitrage.get('certification_scope')}, "
+            f"projection_max_abs_error={projection.get('max_abs_call_price_error')}"
+        )
+
+    dte_coverage = diagnostics.get("dte_coverage", {})
+    if dte_coverage:
+        print(
+            "DTE coverage: "
+            f"requested={dte_coverage.get('requested_min')}-{dte_coverage.get('requested_max')}, "
+            f"fetched={dte_coverage.get('selected_min')}-{dte_coverage.get('selected_max')}, "
+            f"surface={dte_coverage.get('surface_min')}-{dte_coverage.get('surface_max')}, "
+            f"next_after_requested_max={dte_coverage.get('next_available_after_requested_max')}"
+        )
+        for note in dte_coverage.get("notes", []):
+            print(f"DTE coverage note: {note}")
 
     external = diagnostics.get("external_benchmark")
     if external:
@@ -190,14 +215,17 @@ def main():
     parser.add_argument(
         "--smooth",
         action="store_true",
-        help="Apply arbitrage-aware smoothing to build the unified volatility surface.",
+        help="Show an interpolated adjusted grid instead of adjusted surface nodes only.",
     )
     parser.add_argument(
         "--iv_source",
         type=str,
         default="auto",
         choices=["auto", "yfinance", "black-scholes"],
-        help="IV mode: 'auto' (recommended), 'yfinance', or 'black-scholes'.",
+        help=(
+            "IV mode: 'auto' quote-derived first (recommended), "
+            "'yfinance' provider IV comparison, or 'black-scholes' quote-derived IV only."
+        ),
     )
     parser.add_argument(
         "--risk_free_rate",
@@ -281,7 +309,7 @@ def main():
     print(f"DTE range: {args.dte_min} to {args.dte_max} days")
     print(f"IV source: {args.iv_source}")
     print(f"Quality mode: {args.quality_mode}")
-    print("Surface construction: unified call/put arbitrage-free surface")
+    print("Surface construction: unified call/put static-arbitrage-adjusted surface")
     print(f"Fetched {len(raw_options_df)} raw option contracts initially.")
     print(f"Prepared {len(cleaned_options_df)} option contracts with quality metadata.")
 
