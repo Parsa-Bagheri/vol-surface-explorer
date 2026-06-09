@@ -1,6 +1,10 @@
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 const toNumber = (value, fallback) => {
+  if (typeof value === "string" && value.trim() === "") {
+    return fallback;
+  }
+
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 };
@@ -50,23 +54,25 @@ const setupRangeControl = (control) => {
   });
 
   const syncFromMinNumber = () => {
-    if (minNumber.value === "") {
-      return;
-    }
-    setValues(toNumber(minNumber.value, minBound), toNumber(maxNumber.value, maxBound), "min");
+    setValues(
+      toNumber(minNumber.value, toNumber(minSlider.value, minBound)),
+      toNumber(maxSlider.value, maxBound),
+      "min",
+    );
   };
 
   const syncFromMaxNumber = () => {
-    if (maxNumber.value === "") {
-      return;
-    }
-    setValues(toNumber(minNumber.value, minBound), toNumber(maxNumber.value, maxBound), "max");
+    setValues(
+      toNumber(minSlider.value, minBound),
+      toNumber(maxNumber.value, toNumber(maxSlider.value, maxBound)),
+      "max",
+    );
   };
 
-  minNumber.addEventListener("input", syncFromMinNumber);
   minNumber.addEventListener("change", syncFromMinNumber);
-  maxNumber.addEventListener("input", syncFromMaxNumber);
+  minNumber.addEventListener("blur", syncFromMinNumber);
   maxNumber.addEventListener("change", syncFromMaxNumber);
+  maxNumber.addEventListener("blur", syncFromMaxNumber);
 
   minNumber.addEventListener("focus", () => minNumber.select());
   maxNumber.addEventListener("focus", () => maxNumber.select());
@@ -131,3 +137,27 @@ const setupLoadingState = () => {
 };
 
 setupLoadingState();
+
+const setupSpotLineToggle = () => {
+  const toggle = document.querySelector("[data-spot-line-toggle]");
+  const plot = document.querySelector(
+    ".surface-card:not(.loading-surface-card) .plotly-graph-div",
+  );
+  if (!toggle || !plot || !window.Plotly) {
+    return;
+  }
+
+  const spotTraceIndex = plot.data?.findIndex((trace) => trace.name === "Current Spot");
+  if (!Number.isInteger(spotTraceIndex) || spotTraceIndex < 0) {
+    toggle.disabled = true;
+    toggle.checked = false;
+    return;
+  }
+
+  toggle.checked = plot.data[spotTraceIndex].visible !== false;
+  toggle.addEventListener("change", () => {
+    window.Plotly.restyle(plot, { visible: toggle.checked }, [spotTraceIndex]);
+  });
+};
+
+setupSpotLineToggle();

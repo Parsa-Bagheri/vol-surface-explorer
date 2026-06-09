@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Volatility Surface Explorer</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
@@ -36,20 +37,20 @@
         </div>
       </section>
 
-      <section class="field-group range-control" data-range-control data-min-gap="1">
+      <section class="field-group range-control" data-range-control data-min-gap="0">
         <div class="field-heading">
           <span>DTE Range</span>
           <div class="range-values" aria-label="DTE range values">
-            <input class="range-number" id="dte-min-value" name="dte_min" type="number" min="1" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum days to expiration">
+            <input class="range-number" id="dte-min-value" name="dte_min" type="number" min="0" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum days to expiration">
             <span>to</span>
-            <input class="range-number" id="dte-max-value" name="dte_max" type="number" min="1" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum days to expiration">
+            <input class="range-number" id="dte-max-value" name="dte_max" type="number" min="0" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum days to expiration">
             <span>days</span>
           </div>
         </div>
         <div class="dual-range" style="--range-min: 0%; --range-max: 100%;">
           <div class="range-track"><span class="range-fill"></span></div>
-          <input class="range-thumb range-thumb-min" id="dte-min" type="range" min="1" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum DTE slider">
-          <input class="range-thumb range-thumb-max" id="dte-max" type="range" min="1" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum DTE slider">
+          <input class="range-thumb range-thumb-min" id="dte-min" type="range" min="0" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum DTE slider">
+          <input class="range-thumb range-thumb-max" id="dte-max" type="range" min="0" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum DTE slider">
         </div>
       </section>
 
@@ -80,9 +81,17 @@
             {% if surface_cards %}
               <div class="surface-metrics" aria-label="Surface summary">
                 {% for card in surface_cards %}
-                  <div class="surface-metric">
-                    <span>{{ card.label }}</span>
-                    <strong>{{ card.value }}</strong>
+                  <div class="surface-metric{% if card.label == 'Spot' %} surface-metric-spot{% endif %}">
+                    <div class="surface-metric-copy">
+                      <span>{{ card.label }}</span>
+                      <strong>{{ card.value }}</strong>
+                    </div>
+                    {% if card.label == "Spot" %}
+                      <label class="spot-line-toggle" title="Toggle current spot line">
+                        <input type="checkbox" data-spot-line-toggle checked aria-label="Show current spot line">
+                        <span class="spot-line-swatch" aria-hidden="true"></span>
+                      </label>
+                    {% endif %}
                   </div>
                 {% endfor %}
               </div>
@@ -118,40 +127,39 @@
         <details class="advanced-panel">
           <summary>
             <span>Advanced info</span>
-            <small>rows and quality flags</small>
+            <small>contracts and exclusions</small>
           </summary>
 
           <div class="advanced-content">
-            {% if advanced_cards %}
-              <section class="advanced-metrics" aria-label="Advanced metrics">
+            <section class="advanced-metrics" aria-label="Advanced metrics">
+              {% if advanced_cards %}
                 {% for card in advanced_cards %}
                   <div class="advanced-metric">
                     <span>{{ card.label }}</span>
                     <strong>{{ card.value }}</strong>
                   </div>
                 {% endfor %}
-              </section>
-            {% endif %}
+              {% endif %}
 
-            <section class="diagnostics-grid">
-              <article class="diagnostics-panel">
-                <h2>Quality Summary</h2>
-                <ul>
-                  <li>Retained rows: {{ diagnostics.rows_retained }}</li>
-                  <li>Surface rows: {{ diagnostics.rows_surface_included }}</li>
-                  <li>Excluded rows: {{ diagnostics.rows_surface_excluded }}</li>
-                </ul>
-              </article>
-              <article class="diagnostics-panel">
-                <h2>Flag Counts</h2>
-                <ul>
-                  {% for flag, count in diagnostics.flag_counts|dictsort %}
-                    <li>{{ flag }}: {{ count }}</li>
-                  {% else %}
-                    <li>No flags recorded.</li>
-                  {% endfor %}
-                </ul>
-              </article>
+              <div class="exclusion-metric-group">
+                <div class="advanced-metric advanced-metric-excluded">
+                  <span>Excluded Contracts</span>
+                  <strong>{{ diagnostics.rows_surface_excluded }}</strong>
+                </div>
+                <article class="exclusion-reasons">
+                  <h2>Reasons for Exclusion</h2>
+                  <ul>
+                    {% for reason, count in diagnostics.dropped_rows_by_reason|dictsort %}
+                      <li>
+                        <span>{{ reason|replace("_", " ")|title|replace("Iv", "IV")|replace("Oi", "OI") }}</span>
+                        <strong>{{ count }}</strong>
+                      </li>
+                    {% else %}
+                      <li class="no-exclusion-reasons">No excluded contracts.</li>
+                    {% endfor %}
+                  </ul>
+                </article>
+              </div>
             </section>
           </div>
         </details>

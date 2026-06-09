@@ -2,16 +2,25 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import tempfile
 import time
-from typing import Dict, Optional
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from src.time_utils import expiration_close_utc, expiration_dte, normalize_as_of_utc
+from src.time_utils import expiration_dte, normalize_as_of_utc
 
 
 MAX_OPTION_FETCH_WORKERS = 12
+OPTION_INPUT_COLUMNS = (
+    "strike",
+    "volume",
+    "openInterest",
+    "bid",
+    "ask",
+    "lastPrice",
+    "lastTradeDate",
+)
 
 
 def _configure_yfinance_cache() -> None:
@@ -121,42 +130,17 @@ def get_current_price(ticker_symbol: str) -> Optional[float]:
     return float(current_price)
 
 
-def _compute_chain_health(
+def _has_poor_quote_quality(
     chain_df: pd.DataFrame,
     poor_quality_zero_quote_ratio: float,
-) -> Dict[str, float]:
-    """Compute lightweight per-expiration quality metrics."""
+) -> bool:
     if chain_df is None or chain_df.empty:
-        return {
-            "contracts": 0,
-            "zero_bid_ask_ratio": 1.0,
-            "zero_open_interest_ratio": 1.0,
-            "poor_quality": True,
-        }
+        return True
 
     bid = pd.to_numeric(chain_df.get("bid"), errors="coerce")
     ask = pd.to_numeric(chain_df.get("ask"), errors="coerce")
-    oi = pd.to_numeric(chain_df.get("openInterest"), errors="coerce")
-
     zero_quote_mask = bid.isna() | ask.isna() | (bid <= 0) | (ask <= 0) | (ask < bid)
-    zero_oi_mask = oi.fillna(0) <= 0
-
-    contracts = float(len(chain_df))
-    zero_bid_ask_ratio = float(zero_quote_mask.sum() / contracts)
-    zero_open_interest_ratio = float(zero_oi_mask.sum() / contracts)
-
-    poor_quality = bool(zero_bid_ask_ratio >= poor_quality_zero_quote_ratio)
-
-    return {
-        "contracts": int(contracts),
-        "zero_bid_ask_ratio": zero_bid_ask_ratio,
-        "zero_open_interest_ratio": zero_open_interest_ratio,
-        "poor_quality": poor_quality,
-    }
-
-
-def _expiration_dte(expiration_date: str, now_utc: pd.Timestamp) -> Optional[int]:
-    return expiration_dte(expiration_date, now_utc)
+    return bool(float(zero_quote_mask.mean()) >= poor_quality_zero_quote_ratio)
 
 
 def _fetch_expiration_chain(
@@ -166,50 +150,38 @@ def _fetch_expiration_chain(
     max_fetch_attempts: int,
     poor_quality_zero_quote_ratio: float,
     retry_wait_seconds: float,
-) -> tuple[str, pd.DataFrame, pd.DataFrame, Dict[str, object]]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     stock = yf.Ticker(ticker_symbol)
-    chosen_calls = pd.DataFrame()
-    chosen_puts = pd.DataFrame()
-    chosen_health = None
 
     for attempt in range(1, max_fetch_attempts + 1):
-        snapshot_timestamp = pd.Timestamp.now(tz="UTC")
         options_chain = stock.option_chain(expiration_date)
         calls = options_chain.calls.copy()
         puts = options_chain.puts.copy()
 
         chain_for_health = pd.concat([calls, puts], ignore_index=True)
-        health = _compute_chain_health(chain_for_health, poor_quality_zero_quote_ratio)
-        health["expiration"] = expiration_date
-        health["attempt"] = attempt
-        health["snapshot_timestamp_utc"] = snapshot_timestamp.isoformat()
-
         should_retry = bool(
             retry_on_poor_quality
-            and health["poor_quality"]
+            and _has_poor_quote_quality(chain_for_health, poor_quality_zero_quote_ratio)
             and attempt < max_fetch_attempts
         )
         if should_retry:
             time.sleep(retry_wait_seconds)
             continue
 
-        chosen_calls = calls
-        chosen_puts = puts
-        chosen_health = health
-        break
+        return calls, puts
 
-    if chosen_health is None:
-        chosen_health = {
-            "expiration": expiration_date,
-            "attempt": 0,
-            "snapshot_timestamp_utc": pd.Timestamp.now(tz="UTC").isoformat(),
-            "contracts": 0,
-            "zero_bid_ask_ratio": 1.0,
-            "zero_open_interest_ratio": 1.0,
-            "poor_quality": True,
-        }
+    return pd.DataFrame(), pd.DataFrame()
 
-    return expiration_date, chosen_calls, chosen_puts, chosen_health
+
+def _prepare_option_rows(
+    chain_df: pd.DataFrame,
+    expiration_date: str,
+    option_type: str,
+) -> pd.DataFrame:
+    prepared = chain_df.reindex(columns=OPTION_INPUT_COLUMNS).copy()
+    prepared["expirationDate"] = pd.to_datetime(expiration_date)
+    prepared["optionType"] = option_type
+    return prepared
 
 
 def get_options_data(
@@ -231,8 +203,7 @@ def get_options_data(
 
     stock = yf.Ticker(ticker_symbol)
     options_data_list = []
-    fetch_diagnostics = []
-    available_dates = stock.options # Get all available expiration dates
+    available_dates = stock.options
 
     if not available_dates:
         print(f"No option expiration dates found for {ticker_symbol}.")
@@ -241,164 +212,63 @@ def get_options_data(
     print(f"Fetching options for {ticker_symbol} for {len(available_dates)} expiration dates...")
 
     now_utc = normalize_as_of_utc(as_of_utc)
-    available_expirations = []
     selected_dates = []
-    selected_dte_by_date = {}
     for date in available_dates:
-        expiration_days = _expiration_dte(date, now_utc)
-        available_expirations.append(
-            {
-                "expiration": date,
-                "days_to_expiration": expiration_days,
-            }
-        )
-        if expiration_days is None or expiration_days <= 0:
+        expiration_days = expiration_dte(date, now_utc)
+        if expiration_days is None or expiration_days < 0:
             continue
         if min_dte is not None and expiration_days < int(min_dte):
             continue
         if max_dte is not None and expiration_days > int(max_dte):
             continue
         selected_dates.append(date)
-        selected_dte_by_date[date] = expiration_days
 
     if not selected_dates:
         print(f"No option expiration dates matched the requested DTE range for {ticker_symbol}.")
-        empty_df = pd.DataFrame()
-        empty_df.attrs["fetchDiagnostics"] = {
-            "ticker": ticker_symbol,
-            "expirations_available": len(available_dates),
-            "expirations_requested": 0,
-            "expirations_fetched": 0,
-            "expirations_flagged_poor_quality": 0,
-            "max_attempt_used": 0,
-            "as_of_utc": now_utc.isoformat(),
-            "available_expirations": available_expirations,
-            "selected_expirations": [],
-            "details": [],
-        }
-        return empty_df
+        return pd.DataFrame()
 
     print(
         f"Fetching {len(selected_dates)} filtered expiration dates for {ticker_symbol} "
         f"from {len(available_dates)} available dates."
     )
 
-    fetched_by_date = {}
     worker_count = min(MAX_OPTION_FETCH_WORKERS, len(selected_dates))
-    if worker_count <= 1:
-        for date in selected_dates:
+    fetched_by_date = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_by_date = {
+            executor.submit(
+                _fetch_expiration_chain,
+                ticker_symbol,
+                date,
+                retry_on_poor_quality,
+                max_fetch_attempts,
+                poor_quality_zero_quote_ratio,
+                retry_wait_seconds,
+            ): date
+            for date in selected_dates
+        }
+        for future in as_completed(future_by_date):
+            date = future_by_date[future]
             try:
-                fetched_by_date[date] = _fetch_expiration_chain(
-                    ticker_symbol=ticker_symbol,
-                    expiration_date=date,
-                    retry_on_poor_quality=retry_on_poor_quality,
-                    max_fetch_attempts=max_fetch_attempts,
-                    poor_quality_zero_quote_ratio=poor_quality_zero_quote_ratio,
-                    retry_wait_seconds=retry_wait_seconds,
-                )
+                fetched_by_date[date] = future.result()
             except Exception as error:
                 print(f"Could not fetch options for {ticker_symbol} on {date}: {error}")
-    else:
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            future_by_date = {
-                executor.submit(
-                    _fetch_expiration_chain,
-                    ticker_symbol,
-                    date,
-                    retry_on_poor_quality,
-                    max_fetch_attempts,
-                    poor_quality_zero_quote_ratio,
-                    retry_wait_seconds,
-                ): date
-                for date in selected_dates
-            }
-            for future in as_completed(future_by_date):
-                date = future_by_date[future]
-                try:
-                    fetched_by_date[date] = future.result()
-                except Exception as error:
-                    print(f"Could not fetch options for {ticker_symbol} on {date}: {error}")
 
     for date in selected_dates:
         fetched = fetched_by_date.get(date)
         if fetched is None:
             continue
 
-        try:
-            _, chosen_calls, chosen_puts, chosen_health = fetched
-
-            # Add expirationDate, optionType, and snapshot metadata to calls
-            if not chosen_calls.empty:
-                chosen_calls["expirationDate"] = pd.to_datetime(date)
-                chosen_calls["optionType"] = "call"
-                chosen_calls["expirationCloseUtc"] = expiration_close_utc(date)
-                chosen_calls["expirationDteAtFetch"] = selected_dte_by_date.get(date)
-                chosen_calls["snapshotTimestampUtc"] = chosen_health[
-                    "snapshot_timestamp_utc"
-                ]
-                chosen_calls["expirationFetchAttempt"] = chosen_health["attempt"]
-                chosen_calls["expirationZeroBidAskRatio"] = chosen_health[
-                    "zero_bid_ask_ratio"
-                ]
-                chosen_calls["expirationZeroOpenInterestRatio"] = chosen_health[
-                    "zero_open_interest_ratio"
-                ]
-                chosen_calls["expirationPoorQuality"] = chosen_health["poor_quality"]
-                options_data_list.append(chosen_calls)
-
-            # Add expirationDate, optionType, and snapshot metadata to puts
-            if not chosen_puts.empty:
-                chosen_puts["expirationDate"] = pd.to_datetime(date)
-                chosen_puts["optionType"] = "put"
-                chosen_puts["expirationCloseUtc"] = expiration_close_utc(date)
-                chosen_puts["expirationDteAtFetch"] = selected_dte_by_date.get(date)
-                chosen_puts["snapshotTimestampUtc"] = chosen_health[
-                    "snapshot_timestamp_utc"
-                ]
-                chosen_puts["expirationFetchAttempt"] = chosen_health["attempt"]
-                chosen_puts["expirationZeroBidAskRatio"] = chosen_health[
-                    "zero_bid_ask_ratio"
-                ]
-                chosen_puts["expirationZeroOpenInterestRatio"] = chosen_health[
-                    "zero_open_interest_ratio"
-                ]
-                chosen_puts["expirationPoorQuality"] = chosen_health["poor_quality"]
-                options_data_list.append(chosen_puts)
-
-            fetch_diagnostics.append(chosen_health)
-        except Exception as error:
-            print(f"Could not prepare options for {ticker_symbol} on {date}: {error}")
-            continue # Skip to next date if an error occurs
+        chosen_calls, chosen_puts = fetched
+        for option_type, chain_df in (("call", chosen_calls), ("put", chosen_puts)):
+            if not chain_df.empty:
+                options_data_list.append(_prepare_option_rows(chain_df, date, option_type))
 
     if not options_data_list:
         print(f"No options data could be compiled for {ticker_symbol}.")
         return pd.DataFrame()
 
     combined_options_df = pd.concat(options_data_list, ignore_index=True)
-    
-    if fetch_diagnostics:
-        poor_quality_count = sum(
-            1 for item in fetch_diagnostics if item.get("poor_quality")
-        )
-        max_attempt_used = max(item.get("attempt", 1) for item in fetch_diagnostics)
-        combined_options_df.attrs["fetchDiagnostics"] = {
-            "ticker": ticker_symbol,
-            "expirations_available": len(available_dates),
-            "expirations_requested": len(selected_dates),
-            "expirations_fetched": len(fetch_diagnostics),
-            "expirations_flagged_poor_quality": poor_quality_count,
-            "max_attempt_used": max_attempt_used,
-            "as_of_utc": now_utc.isoformat(),
-            "available_expirations": available_expirations,
-            "selected_expirations": [
-                {
-                    "expiration": date,
-                    "days_to_expiration": selected_dte_by_date.get(date),
-                }
-                for date in selected_dates
-            ],
-            "details": fetch_diagnostics,
-        }
 
     print(f"Successfully fetched {len(combined_options_df)} total option contracts for {ticker_symbol}.")
     return combined_options_df

@@ -2,41 +2,36 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy.stats import norm
 
-from src.data_cleaner import (
-    _black_scholes_price,
-    _implied_volatility,
-    _no_arbitrage_bounds,
-    build_diagnostics_report,
-    build_internal_validation_report,
-    prepare_options_data,
-)
-from src.data_fetch import _expiration_dte
+from src.data_cleaner import _black_scholes_prices_array, _implied_volatility, _no_arbitrage_bounds
+from src.data_cleaner import build_diagnostics_report, prepare_options_data
+from src.time_utils import expiration_dte
 
 
-def _black_scholes_call_price(
-    spot: float,
-    strike: float,
-    time_to_expiration: float,
-    risk_free_rate: float,
-    volatility: float,
-) -> float:
-    if time_to_expiration <= 0 or volatility <= 0:
-        raise ValueError("Time to expiration and volatility must be positive for pricing.")
+OUTPUT_COLUMNS = """
+strike days_to_expiration time_to_expiration_years impliedVolatilityFinal optionType
+volume openInterest spreadRatio forwardPrice dividendYieldUsed confidenceLevel qualityFlags
+includeInSurface surfaceWeight
+""".split()
 
+
+def _black_scholes_call_price(spot, strike, time_to_expiration, risk_free_rate, volatility):
     sqrt_t = np.sqrt(time_to_expiration)
     d1 = (
         np.log(spot / strike)
         + (risk_free_rate + 0.5 * volatility**2) * time_to_expiration
     ) / (volatility * sqrt_t)
     d2 = d1 - volatility * sqrt_t
-    return spot * norm.cdf(d1) - strike * np.exp(-risk_free_rate * time_to_expiration) * norm.cdf(d2)
+    return spot * norm.cdf(d1) - strike * np.exp(
+        -risk_free_rate * time_to_expiration
+    ) * norm.cdf(d2)
 
 
 def _base_row(**overrides):
     now = datetime.now(timezone.utc)
-    row = {
+    return {
         "strike": 100.0,
         "expirationDate": (now + timedelta(days=30)).date(),
         "optionType": "call",
@@ -47,488 +42,253 @@ def _base_row(**overrides):
         "ask": 5.5,
         "lastPrice": 5.0,
         "lastTradeDate": now.isoformat(),
+        **overrides,
     }
-    row.update(overrides)
-    return row
+
+
+def _clean_rows(*rows, **kwargs):
+    spot = kwargs.pop("underlying_price", 100.0)
+    return prepare_options_data(pd.DataFrame(rows), underlying_price=spot, **kwargs)
+
+
+def _clean_row(overrides=None, **kwargs):
+    return _clean_rows(_base_row(**(overrides or {})), **kwargs).iloc[0]
+
+
+def _quote_price(volatility=0.24, dte=30):
+    return _black_scholes_call_price(100.0, 100.0, dte / 365.25, 0.02, volatility)
+
+
+def _trade_time(**delta):
+    return (datetime.now(timezone.utc) - timedelta(**delta)).isoformat()
 
 
 def test_prepare_options_data_black_scholes_iv():
-    spot_price = 100.0
-    strike_price = 100.0
-    days_to_expiration = 30
-    risk_free_rate = 0.02
     true_volatility = 0.25
-    time_to_expiration_years = days_to_expiration / 365.25
-
-    theoretical_price = _black_scholes_call_price(
-        spot=spot_price,
-        strike=strike_price,
-        time_to_expiration=time_to_expiration_years,
-        risk_free_rate=risk_free_rate,
-        volatility=true_volatility,
+    market_price = _quote_price(true_volatility)
+    cleaned = _clean_rows(
+        _base_row(
+            impliedVolatility=0.0,
+            bid=market_price * 0.99,
+            ask=market_price * 1.01,
+            lastPrice=market_price,
+        ),
+        risk_free_rate=0.02,
     )
 
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                strike=strike_price,
-                expirationDate=(datetime.now(timezone.utc) + timedelta(days=days_to_expiration)).date(),
-                impliedVolatility=0.0,
-                bid=theoretical_price * 0.99,
-                ask=theoretical_price * 1.01,
-                lastPrice=theoretical_price,
-            )
-        ]
-    )
+    assert cleaned.columns.tolist() == OUTPUT_COLUMNS
+    assert abs(cleaned.iloc[0]["impliedVolatilityFinal"] - true_volatility) < 5e-3
+    assert bool(cleaned.iloc[0]["includeInSurface"]) is True
 
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        risk_free_rate=risk_free_rate,
-    )
 
-    assert not cleaned_df.empty
-    computed_iv = cleaned_df["impliedVolatilityFinal"].iloc[0]
-    assert abs(computed_iv - true_volatility) < 5e-3
-    assert abs(cleaned_df["blackScholesImpliedVolatility"].iloc[0] - true_volatility) < 5e-3
-    assert bool(cleaned_df["includeInSurface"].iloc[0]) is True
+def test_prepare_options_data_rejects_incomplete_schema():
+    with pytest.raises(ValueError, match="openInterest"):
+        prepare_options_data(pd.DataFrame([_base_row()]).drop(columns=["openInterest"]), underlying_price=100.0)
 
 
 def test_black_scholes_price_matches_dividend_adjusted_formula():
-    spot_price = 100.0
-    strike_price = 105.0
-    risk_free_rate = 0.03
-    dividend_yield = 0.01
-    time_to_expiration_years = 45.0 / 365.25
-    volatility = 0.24
-
-    sqrt_t = np.sqrt(time_to_expiration_years)
-    d1 = (
-        np.log(spot_price / strike_price)
-        + (risk_free_rate - dividend_yield + 0.5 * volatility**2) * time_to_expiration_years
-    ) / (volatility * sqrt_t)
+    spot, strike, rate, dividend, t, volatility = 100.0, 105.0, 0.03, 0.01, 45 / 365.25, 0.24
+    sqrt_t = np.sqrt(t)
+    d1 = (np.log(spot / strike) + (rate - dividend + 0.5 * volatility**2) * t) / (
+        volatility * sqrt_t
+    )
     d2 = d1 - volatility * sqrt_t
-    expected_call = spot_price * np.exp(-dividend_yield * time_to_expiration_years) * norm.cdf(d1) - strike_price * np.exp(-risk_free_rate * time_to_expiration_years) * norm.cdf(d2)
-    expected_put = strike_price * np.exp(-risk_free_rate * time_to_expiration_years) * norm.cdf(-d2) - spot_price * np.exp(-dividend_yield * time_to_expiration_years) * norm.cdf(-d1)
+    discounted_spot = spot * np.exp(-dividend * t)
+    discounted_strike = strike * np.exp(-rate * t)
+    expected = [
+        discounted_spot * norm.cdf(d1) - discounted_strike * norm.cdf(d2),
+        discounted_strike * norm.cdf(-d2) - discounted_spot * norm.cdf(-d1),
+    ]
 
-    actual_call = _black_scholes_price(
-        option_type="call",
-        spot=spot_price,
-        strike=strike_price,
-        time_to_expiration=time_to_expiration_years,
-        risk_free_rate=risk_free_rate,
-        volatility=volatility,
-        dividend_yield=dividend_yield,
-    )
-    actual_put = _black_scholes_price(
-        option_type="put",
-        spot=spot_price,
-        strike=strike_price,
-        time_to_expiration=time_to_expiration_years,
-        risk_free_rate=risk_free_rate,
-        volatility=volatility,
-        dividend_yield=dividend_yield,
+    actual = _black_scholes_prices_array(
+        np.array(["call", "put"]), spot, np.array([strike, strike]), t, rate, volatility, dividend
     )
 
-    assert abs(actual_call - expected_call) < 1e-10
-    assert abs(actual_put - expected_put) < 1e-10
+    assert np.allclose(actual, expected, atol=1e-10)
 
 
 def test_zero_volatility_limit_returns_lower_bound_and_inverts_to_zero():
-    spot_price = 100.0
-    strike_price = 90.0
-    time_to_expiration_years = 30.0 / 365.25
-    risk_free_rate = 0.02
-    dividend_yield = 0.01
-    lower_bound, _ = _no_arbitrage_bounds(
-        option_type="call",
-        spot=spot_price,
-        strike=strike_price,
-        time_to_expiration=time_to_expiration_years,
-        risk_free_rate=risk_free_rate,
-        dividend_yield=dividend_yield,
-    )
+    spot, strike, t, rate, dividend = 100.0, 90.0, 30 / 365.25, 0.02, 0.01
+    lower, _ = _no_arbitrage_bounds("call", spot, strike, t, rate, dividend)
+    zero_price = _black_scholes_prices_array(
+        "call", spot, np.array([strike]), t, rate, 0.0, dividend
+    )[0]
 
-    price_at_zero_vol = _black_scholes_price(
-        option_type="call",
-        spot=spot_price,
-        strike=strike_price,
-        time_to_expiration=time_to_expiration_years,
-        risk_free_rate=risk_free_rate,
-        volatility=0.0,
-        dividend_yield=dividend_yield,
-    )
-    implied_volatility = _implied_volatility(
-        option_type="call",
-        spot=spot_price,
-        strike=strike_price,
-        time_to_expiration=time_to_expiration_years,
-        risk_free_rate=risk_free_rate,
-        market_price=lower_bound,
-        dividend_yield=dividend_yield,
-    )
-
-    assert abs(price_at_zero_vol - lower_bound) < 1e-12
-    assert implied_volatility == 0.0
+    assert abs(zero_price - lower) < 1e-12
+    assert _implied_volatility("call", spot, strike, t, rate, lower, dividend) == 0.0
 
 
 def test_raw_iv_field_is_ignored_when_quote_iv_is_available():
-    spot_price = 100.0
-    true_volatility = 0.22
-    days_to_expiration = 30
-    t = days_to_expiration / 365.25
-    market_price = _black_scholes_call_price(spot_price, 100.0, t, 0.02, true_volatility)
-
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=1e-5,
-                bid=market_price * 0.99,
-                ask=market_price * 1.01,
-                lastPrice=market_price,
-            )
-        ]
-    )
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
+    market_price = _quote_price(0.22)
+    row = _clean_row(
+        {
+            "impliedVolatility": 1e-5,
+            "bid": market_price * 0.99,
+            "ask": market_price * 1.01,
+            "lastPrice": market_price,
+        }
     )
 
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
+    assert abs(row["impliedVolatilityFinal"] - 0.22) < 5e-3
     assert bool(row["includeInSurface"]) is True
 
 
-def test_black_scholes_excludes_unreliable_wide_midpoint_iv():
-    spot_price = 100.0
-    recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=0.35,
-                bid=0.25,
-                ask=8.00,
-                lastPrice=4.00,
-                lastTradeDate=recent_trade,
-                volume=100.0,
-                openInterest=500.0,
-            )
-        ]
+@pytest.mark.parametrize(
+    ("overrides", "extra_flags"),
+    [
+        ({"lastTradeDate": _trade_time(hours=12)}, set()),
+        ({"lastPrice": 2.5}, {"recent_trade_inside_wide_quote"}),
+        ({"lastTradeDate": _trade_time(days=10)}, {"stale_last_trade"}),
+    ],
+    ids=["wide-midpoint", "recent-inside-quote", "stale-wide-quote"],
+)
+def test_unreliable_wide_quotes_are_excluded(overrides, extra_flags):
+    row = _clean_row(
+        {
+            "impliedVolatility": 0.35,
+            "bid": 0.25,
+            "ask": 8.0,
+            "lastPrice": 4.0,
+            "volume": 100.0,
+            "openInterest": 500.0,
+            **overrides,
+        }
     )
 
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert np.isfinite(row["blackScholesImpliedVolatility"])
-    assert "wide_recompute_spread" in row["qualityFlags"]
-    assert "wide_iv_bid_ask" in row["qualityFlags"]
-    assert "recomputed_iv_unreliable" in row["qualityFlags"]
+    flags = set(row["qualityFlags"].split(";"))
+    assert {
+        "wide_recompute_spread",
+        "wide_iv_bid_ask",
+        "recomputed_iv_unreliable",
+        *extra_flags,
+    } <= flags
     assert pd.isna(row["impliedVolatilityFinal"])
-    assert bool(row["includeInSurface"]) is False
-
-
-def test_black_scholes_excludes_recent_trade_inside_wide_quote():
-    spot_price = 100.0
-    last_price = 2.50
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=0.35,
-                bid=0.25,
-                ask=8.00,
-                lastPrice=last_price,
-                volume=100.0,
-                openInterest=500.0,
-            )
-        ]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert row["priceSourceUsed"] == "mid"
-    assert "recent_trade_inside_wide_quote" in row["qualityFlags"]
-    assert "wide_recompute_spread" in row["qualityFlags"]
-    assert "wide_iv_bid_ask" in row["qualityFlags"]
-    assert "recomputed_iv_unreliable" in row["qualityFlags"]
-    assert pd.isna(row["impliedVolatilityFinal"])
-    assert bool(row["includeInSurface"]) is False
-
-
-def test_unreliable_quote_iv_is_not_filled_from_raw_iv_field():
-    spot_price = 100.0
-    ignored_raw_iv = 0.35
-    stale_trade = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=ignored_raw_iv,
-                bid=0.25,
-                ask=8.00,
-                lastPrice=4.00,
-                lastTradeDate=stale_trade,
-                volume=100.0,
-                openInterest=500.0,
-            )
-        ]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert pd.isna(row["impliedVolatilityFinal"])
-    assert "wide_recompute_spread" in row["qualityFlags"]
-    assert "wide_iv_bid_ask" in row["qualityFlags"]
-    assert "recomputed_iv_unreliable" in row["qualityFlags"]
     assert row["confidenceLevel"] == "low"
     assert bool(row["includeInSurface"]) is False
 
 
-def test_black_scholes_keeps_last_price_iv_when_quote_support_is_missing():
-    spot_price = 100.0
-    true_volatility = 0.24
-    days_to_expiration = 30
-    t = days_to_expiration / 365.25
-    market_price = _black_scholes_call_price(
-        spot_price, 100.0, t, 0.02, true_volatility
-    )
-    recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=1e-5,
-                bid=0.0,
-                ask=0.0,
-                lastPrice=market_price,
-                lastTradeDate=recent_trade,
-                volume=100.0,
-                openInterest=0.0,
-            )
-        ]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
+@pytest.mark.parametrize(
+    ("raw_iv", "open_interest"),
+    [(1e-5, 0.0), (0.28, 100.0)],
+    ids=["low-open-interest", "normal-open-interest"],
+)
+def test_recent_last_price_iv_without_quotes_is_surface_eligible(raw_iv, open_interest):
+    row = _clean_row(
+        {
+            "impliedVolatility": raw_iv,
+            "bid": 0.0,
+            "ask": 0.0,
+            "lastPrice": _quote_price(),
+            "lastTradeDate": _trade_time(hours=12),
+            "volume": 100.0,
+            "openInterest": open_interest,
+        },
         max_trade_age_hours=72.0,
     )
 
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
+    assert abs(row["impliedVolatilityFinal"] - 0.24) < 5e-3
     assert row["confidenceLevel"] == "medium"
     assert bool(row["includeInSurface"]) is True
     assert "no_two_sided_quote" in row["qualityFlags"]
     assert "recomputed_iv_low_quote_support" in row["qualityFlags"]
+    assert "stale_last_trade" not in row["qualityFlags"]
+
+
+def test_black_scholes_excludes_stale_last_price_when_quote_support_is_missing():
+    row = _clean_row(
+        {
+            "bid": 0.0,
+            "ask": 0.0,
+            "lastPrice": _quote_price(),
+            "lastTradeDate": _trade_time(days=10),
+            "volume": 100.0,
+            "openInterest": 500.0,
+        },
+        max_trade_age_hours=72.0,
+    )
+
+    assert pd.isna(row["impliedVolatilityFinal"])
+    assert bool(row["includeInSurface"]) is False
+    assert {"stale_last_trade", "recomputed_iv_unreliable"} <= set(
+        row["qualityFlags"].split(";")
+    )
 
 
 def test_arbitrage_violation_flagged_and_excluded():
-    spot_price = 100.0
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                optionType="call",
-                impliedVolatility=1e-5,
-                bid=149.0,
-                ask=151.0,
-                lastPrice=150.0,
-            )
-        ]
+    row = _clean_row(
+        {"impliedVolatility": 1e-5, "bid": 149.0, "ask": 151.0, "lastPrice": 150.0}
     )
 
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
     assert "arbitrage_violation" in row["qualityFlags"]
     assert bool(row["includeInSurface"]) is False
     assert pd.isna(row["impliedVolatilityFinal"])
 
 
-def test_lenient_quality_keeps_recomputed_iv_with_missing_quotes_when_last_price_is_usable():
-    spot_price = 100.0
-    true_volatility = 0.24
-    days_to_expiration = 30
-    t = days_to_expiration / 365.25
-    market_price = _black_scholes_call_price(
-        spot_price, 100.0, t, 0.02, true_volatility
-    )
-    recent_trade = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
-    ignored_raw_iv = 0.28
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=ignored_raw_iv,
-                bid=0.0,
-                ask=0.0,
-                lastPrice=market_price,
-                lastTradeDate=recent_trade,
-            )
-        ]
+@pytest.mark.parametrize(
+    ("volume", "open_interest", "expected_flags", "confidence", "included"),
+    [
+        (np.nan, np.nan, {"oi_zero_or_missing"}, {"medium", "low"}, None),
+        (0.0, 0.0, {"oi_zero_or_missing", "volume_zero_or_missing"}, {"low"}, False),
+    ],
+    ids=["nan-liquidity", "zero-liquidity"],
+)
+def test_missing_liquidity_is_flagged(volume, open_interest, expected_flags, confidence, included):
+    row = _clean_row(
+        {"volume": volume, "openInterest": open_interest, "impliedVolatility": 0.31}
     )
 
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-        max_trade_age_hours=72.0,
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert abs(row["impliedVolatilityFinal"] - true_volatility) < 5e-3
-    assert row["confidenceLevel"] == "medium"
-    assert bool(row["includeInSurface"]) is True
-    assert "stale_last_trade" not in row["qualityFlags"]
-    assert "no_two_sided_quote" in row["qualityFlags"]
-    assert "recomputed_iv_low_quote_support" in row["qualityFlags"]
-
-
-def test_black_scholes_excludes_stale_last_price_when_quote_support_is_missing():
-    spot_price = 100.0
-    true_volatility = 0.24
-    days_to_expiration = 30
-    t = days_to_expiration / 365.25
-    market_price = _black_scholes_call_price(
-        spot_price, 100.0, t, 0.02, true_volatility
-    )
-    stale_trade = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
-    raw_df = pd.DataFrame(
-        [
-            _base_row(
-                impliedVolatility=0.28,
-                bid=0.0,
-                ask=0.0,
-                lastPrice=market_price,
-                lastTradeDate=stale_trade,
-                volume=100.0,
-                openInterest=500.0,
-            )
-        ]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-        max_trade_age_hours=72.0,
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert np.isfinite(row["blackScholesImpliedVolatility"])
-    assert pd.isna(row["impliedVolatilityFinal"])
-    assert bool(row["includeInSurface"]) is False
-    assert "stale_last_trade" in row["qualityFlags"]
-    assert "recomputed_iv_unreliable" in row["qualityFlags"]
-
-
-def test_nan_open_interest_is_flagged_deterministically():
-    spot_price = 100.0
-    raw_df = pd.DataFrame(
-        [_base_row(openInterest=np.nan, volume=np.nan, impliedVolatility=0.31)]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert "oi_zero_or_missing" in row["qualityFlags"]
-    assert row["confidenceLevel"] in {"medium", "low"}
-
-
-def test_zero_volume_and_zero_open_interest_are_excluded_from_surface():
-    spot_price = 100.0
-    raw_df = pd.DataFrame(
-        [_base_row(openInterest=0.0, volume=0.0, impliedVolatility=0.31)]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-
-    assert len(cleaned_df) == 1
-    row = cleaned_df.iloc[0]
-    assert "oi_zero_or_missing" in row["qualityFlags"]
-    assert "volume_zero_or_missing" in row["qualityFlags"]
-    assert row["confidenceLevel"] == "low"
-    assert bool(row["includeInSurface"]) is False
-    assert row["surfaceWeight"] < 0.5
+    assert expected_flags <= set(row["qualityFlags"].split(";"))
+    assert row["confidenceLevel"] in confidence
+    if included is not None:
+        assert bool(row["includeInSurface"]) is included
+        assert row["surfaceWeight"] < 0.5
 
 
 def test_min_dte_filter_removes_short_dated_contracts():
-    spot_price = 100.0
     now = datetime.now(timezone.utc)
-    raw_df = pd.DataFrame(
-        [
-            _base_row(expirationDate=(now + timedelta(days=10)).date(), strike=100.0),
-            _base_row(expirationDate=(now + timedelta(days=45)).date(), strike=105.0),
-        ]
-    )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
+    cleaned = _clean_rows(
+        _base_row(expirationDate=(now + timedelta(days=10)).date(), strike=100.0),
+        _base_row(expirationDate=(now + timedelta(days=45)).date(), strike=105.0),
         min_dte=20,
         max_dte=60,
-        quality_mode="lenient",
     )
 
-    assert len(cleaned_df) == 1
-    assert cleaned_df["days_to_expiration"].iloc[0] >= 20
+    assert len(cleaned) == 1
+    assert cleaned.iloc[0]["days_to_expiration"] >= 20
 
 
-def test_expiration_dte_uses_new_york_close_during_daylight_saving_time():
-    as_of = pd.Timestamp("2026-05-15 20:30:00", tz="UTC")
+@pytest.mark.parametrize(
+    ("as_of", "expected"),
+    [("2026-05-15 14:00:00", 0), ("2026-05-15 20:30:00", -1)],
+    ids=["before-close", "after-close"],
+)
+def test_expiration_dte_respects_new_york_close(as_of, expected):
+    assert expiration_dte("2026-05-15", pd.Timestamp(as_of, tz="UTC")) == expected
 
-    assert _expiration_dte("2026-05-15", as_of) == 0
+
+def test_prepare_options_data_retains_zero_dte_before_close():
+    market_price = _black_scholes_call_price(100.0, 100.0, 6 / (24 * 365.25), 0.02, 0.30)
+    cleaned = _clean_rows(
+        _base_row(
+            expirationDate=pd.Timestamp("2026-05-15").date(),
+            bid=market_price * 0.99,
+            ask=market_price * 1.01,
+            lastPrice=market_price,
+            lastTradeDate="2026-05-15T13:45:00Z",
+        ),
+        min_dte=0,
+        max_dte=0,
+        as_of_utc=pd.Timestamp("2026-05-15 14:00:00", tz="UTC"),
+    )
+
+    assert len(cleaned) == 1
+    assert cleaned.iloc[0]["days_to_expiration"] == 0
+    assert cleaned.iloc[0]["time_to_expiration_years"] > 0
 
 
-def test_diagnostics_report_counts_flags_and_exclusions():
-    spot_price = 100.0
-    now = datetime.now(timezone.utc)
-    raw_df = pd.DataFrame(
-        [
+def test_diagnostics_report_counts_contracts_and_exclusions():
+    report = build_diagnostics_report(
+        _clean_rows(
             _base_row(impliedVolatility=0.25),
             _base_row(
                 strike=105.0,
@@ -536,42 +296,39 @@ def test_diagnostics_report_counts_flags_and_exclusions():
                 bid=0.0,
                 ask=0.0,
                 lastPrice=0.0,
-                lastTradeDate=(now - timedelta(days=7)).isoformat(),
+                lastTradeDate=_trade_time(days=7),
             ),
-        ]
+        )
     )
-
-    cleaned_df = prepare_options_data(
-        raw_df,
-        option_type_to_plot="call",
-        underlying_price=spot_price,
-        quality_mode="lenient",
-    )
-    report = build_diagnostics_report(cleaned_df, raw_row_count=len(raw_df))
 
     assert report["rows_retained"] == 2
     assert report["rows_surface_excluded"] >= 1
-    assert "iv_unavailable" in report["flag_counts"]
-    assert report["raw_row_count"] == 2
+    assert sum(report["dropped_rows_by_reason"].values()) == report["rows_surface_excluded"]
+    assert set(report) == {
+        "rows_retained",
+        "rows_surface_included",
+        "rows_surface_excluded",
+        "surface_dte_min",
+        "surface_dte_max",
+        "dropped_rows_by_reason",
+    }
 
 
-def test_internal_validation_tolerates_missing_market_price_column():
-    validation_df = pd.DataFrame(
-        [
-            {
-                "optionType": "call",
-                "strike": 100.0,
-                "time_to_expiration_years": 30.0 / 365.25,
-                "impliedVolatilityFinal": 0.22,
-            }
-        ]
+def test_diagnostics_exclusion_reasons_assign_one_primary_reason_per_contract():
+    report = build_diagnostics_report(
+        pd.DataFrame(
+            [
+                (10, True, "high", "none"),
+                (10, False, "low", "iv_unavailable;recomputed_iv_unreliable;wide_recompute_spread"),
+                (20, False, "low", "low_open_interest;volume_zero_or_missing"),
+            ],
+            columns="days_to_expiration includeInSurface confidenceLevel qualityFlags".split(),
+        )
     )
 
-    report = build_internal_validation_report(
-        validation_df,
-        underlying_price=100.0,
-    )
-
-    assert report["rows_checked"] == 1
-    assert report["rows_with_market_price"] == 0
-    assert report["repricing_mae"] is None
+    assert report["rows_surface_excluded"] == 2
+    assert report["dropped_rows_by_reason"] == {
+        "insufficient_liquidity": 1,
+        "wide_recompute_spread": 1,
+    }
+    assert sum(report["dropped_rows_by_reason"].values()) == report["rows_surface_excluded"]

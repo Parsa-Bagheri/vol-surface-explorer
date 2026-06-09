@@ -4,7 +4,6 @@ from datetime import datetime, time
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-import numpy as np
 import pandas as pd
 
 
@@ -37,33 +36,19 @@ def expiration_close_utc(expiration_date) -> pd.Timestamp:
     return local_close.tz_convert("UTC")
 
 
-def expiration_dte(expiration_date, as_of_utc: Optional[pd.Timestamp] = None) -> Optional[int]:
-    """Compute displayed DTE as ceil calendar days to 4pm New York expiration."""
-    valuation_time = normalize_as_of_utc(as_of_utc)
-    expiration_close = expiration_close_utc(expiration_date)
-    if pd.isna(expiration_close):
-        return None
-
-    remaining_days = (
-        expiration_close - valuation_time
-    ).total_seconds() / (24.0 * 60.0 * 60.0)
-    if not np.isfinite(remaining_days):
-        return None
-    return int(np.ceil(remaining_days))
-
-
-def time_to_expiration_years(
+def expiration_dte(
     expiration_date,
     as_of_utc: Optional[pd.Timestamp] = None,
-) -> float:
+) -> Optional[int]:
+    """Compute exchange-calendar DTE while excluding contracts past their close."""
     valuation_time = normalize_as_of_utc(as_of_utc)
     expiration_close = expiration_close_utc(expiration_date)
     if pd.isna(expiration_close):
-        return float("nan")
+        return None
 
-    remaining_years = (
-        expiration_close - valuation_time
-    ).total_seconds() / (365.25 * 24.0 * 60.0 * 60.0)
-    if not np.isfinite(remaining_years):
-        return float("nan")
-    return float(remaining_years)
+    if expiration_close <= valuation_time:
+        return -1
+
+    valuation_day = valuation_time.tz_convert(OPTION_EXCHANGE_TZ).date()
+    expiration_day = expiration_close.tz_convert(OPTION_EXCHANGE_TZ).date()
+    return int((expiration_day - valuation_day).days)

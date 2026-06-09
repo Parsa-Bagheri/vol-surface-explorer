@@ -1,62 +1,66 @@
-from datetime import datetime, timedelta, timezone
-
 import numpy as np
 import pandas as pd
+import pytest
 
-from src.data_cleaner import _black_scholes_price
+from src.data_cleaner import _black_scholes_prices_array
 from src.visualizer import _build_arbitrage_free_surface, create_vol_surface
 
 
 def _build_surface_input():
-    now = datetime.now(timezone.utc)
-    base_rows = []
-    for option_type, iv_base in [("call", 0.20), ("put", 0.24)]:
-        for strike in [95.0, 100.0, 105.0]:
-            for dte in [10, 20, 30]:
-                base_rows.append(
-                    {
-                        "strike": strike,
-                        "days_to_expiration": dte,
-                        "time_to_expiration_years": dte / 365.25,
-                        "impliedVolatilityFinal": iv_base + (strike - 100.0) * 0.001,
-                        "impliedVolatility": iv_base + (strike - 100.0) * 0.001,
-                        "expirationDate": (now + timedelta(days=dte)).date(),
-                        "optionType": option_type,
-                        "volume": 100.0,
-                        "openInterest": 200.0,
-                        "bid": 1.0,
-                        "ask": 1.2,
-                        "lastPrice": 1.1,
-                        "lastTradeDate": now.isoformat(),
-                        "marketPrice": 1.1,
-                        "priceSourceUsed": "mid",
-                        "spreadRatio": 0.1,
-                        "confidenceLevel": "high",
-                        "qualityFlags": "none",
-                        "includeInSurface": True,
-                    }
-                )
-    return pd.DataFrame(base_rows)
+    return pd.DataFrame(
+        [
+            {
+                "strike": strike,
+                "days_to_expiration": dte,
+                "time_to_expiration_years": dte / 365.25,
+                "impliedVolatilityFinal": iv_base + (strike - 100.0) * 0.001,
+                "optionType": option_type,
+                "forwardPrice": 100.0 * np.exp(0.02 * dte / 365.25),
+                "dividendYieldUsed": 0.0,
+                "surfaceWeight": 1.0,
+                "volume": 100.0,
+                "openInterest": 200.0,
+                "spreadRatio": 0.1,
+                "confidenceLevel": "high",
+                "includeInSurface": True,
+            }
+            for option_type, iv_base in [("call", 0.20), ("put", 0.24)]
+            for strike in [95.0, 100.0, 105.0]
+            for dte in [10, 20, 30]
+        ]
+    )
 
 
 def test_create_vol_surface_smoothed_creates_one_unified_surface():
     df = _build_surface_input()
-    fig = create_vol_surface(df, ticker="TEST", smooth=True, underlying_price=100.0)
+    fig = create_vol_surface(df, smooth=True, underlying_price=100.0)
 
     assert fig is not None
-    assert len(fig.data) == 1
     trace_types = {trace.type for trace in fig.data}
     assert "surface" in trace_types
     assert "mesh3d" not in trace_types
+    assert [trace.name for trace in fig.data].count("Current Spot") == 1
+
+
+def test_current_spot_line_is_dotted_white_and_follows_the_surface():
+    df = _build_surface_input()
+    fig = create_vol_surface(df, smooth=True, underlying_price=100.0)
+
+    spot_trace = next(trace for trace in fig.data if trace.name == "Current Spot")
+    assert spot_trace.type == "scatter3d"
+    assert spot_trace.mode == "lines"
+    assert spot_trace.line.color == "#ffffff"
+    assert spot_trace.line.dash == "dot"
+    assert spot_trace.opacity < 1.0
+    assert np.allclose(np.asarray(spot_trace.x, dtype=float), 100.0)
 
 
 def test_unified_surface_collapses_call_and_put_quotes_into_one_node_per_strike_and_dte():
     df = _build_surface_input()
-    _, _, _, _, surface_nodes = _build_arbitrage_free_surface(
+    _, _, _, surface_nodes = _build_arbitrage_free_surface(
         df=df,
         underlying_price=100.0,
         risk_free_rate=0.02,
-        dividend_yield=0.0,
         dte_step=1,
     )
 
@@ -69,7 +73,6 @@ def test_unified_surface_collapses_call_and_put_quotes_into_one_node_per_strike_
 
 
 def test_arbitrage_free_surface_projection_enforces_discrete_static_arbitrage():
-    now = datetime.now(timezone.utc)
     rows = []
     for dte, ivs in [
         (10, {90.0: 0.20, 100.0: 0.36, 110.0: 0.16}),
@@ -83,23 +86,23 @@ def test_arbitrage_free_surface_projection_enforces_discrete_static_arbitrage():
                     "days_to_expiration": dte,
                     "time_to_expiration_years": dte / 365.25,
                     "impliedVolatilityFinal": implied_volatility,
-                    "expirationDate": (now + timedelta(days=dte)).date(),
                     "optionType": "call",
+                    "forwardPrice": 100.0 * np.exp(0.02 * dte / 365.25),
+                    "dividendYieldUsed": 0.0,
+                    "surfaceWeight": 1.0,
                     "volume": 25.0 if strike == 100.0 else 1.0,
                     "openInterest": 150.0 if strike == 100.0 else 5.0,
                     "spreadRatio": 0.05 if strike == 100.0 else 0.40,
                     "confidenceLevel": "high" if strike == 100.0 else "medium",
-                    "qualityFlags": "none",
                     "includeInSurface": True,
                 }
             )
     df = pd.DataFrame(rows)
 
-    _, grid_strike, grid_dte, iv_grid, _ = _build_arbitrage_free_surface(
+    grid_strike, grid_dte, iv_grid, _ = _build_arbitrage_free_surface(
         df=df,
         underlying_price=100.0,
         risk_free_rate=0.02,
-        dividend_yield=0.0,
         dte_step=1,
     )
 
@@ -109,19 +112,14 @@ def test_arbitrage_free_surface_projection_enforces_discrete_static_arbitrage():
 
     for row_index in range(iv_grid.shape[0]):
         time_to_expiration = grid_dte[row_index, 0] / 365.25
-        prices = np.array(
-            [
-                _black_scholes_price(
-                    option_type="call",
-                    spot=100.0,
-                    strike=float(strike),
-                    time_to_expiration=float(time_to_expiration),
-                    risk_free_rate=0.02,
-                    volatility=float(volatility),
-                    dividend_yield=0.0,
-                )
-                for strike, volatility in zip(grid_strike[row_index], iv_grid[row_index])
-            ]
+        prices = _black_scholes_prices_array(
+            option_types="call",
+            spot=100.0,
+            strikes=grid_strike[row_index],
+            time_to_expiration=float(time_to_expiration),
+            risk_free_rate=0.02,
+            volatility=iv_grid[row_index],
+            dividend_yield=0.0,
         )
         first_difference = np.diff(prices)
         strike_steps = np.diff(grid_strike[row_index])
@@ -133,57 +131,44 @@ def test_arbitrage_free_surface_projection_enforces_discrete_static_arbitrage():
     assert np.all(np.diff(total_variance, axis=0) >= -1e-10)
 
 
-def _build_selected_iv_surface_input(selected_iv: float, quoted_iv: float = 0.20):
-    now = datetime.now(timezone.utc)
-    rows = []
-    for dte in [20, 45]:
-        t = dte / 365.25
-        for strike in [90.0, 95.0, 100.0, 105.0, 110.0]:
-            quoted_market_price = _black_scholes_price(
-                option_type="call",
-                spot=100.0,
-                strike=strike,
-                time_to_expiration=t,
-                risk_free_rate=0.02,
-                volatility=quoted_iv,
-                dividend_yield=0.0,
-            )
-            rows.append(
-                {
-                    "strike": strike,
-                    "days_to_expiration": dte,
-                    "time_to_expiration_years": t,
-                    "impliedVolatilityFinal": selected_iv,
-                    "expirationDate": (now + timedelta(days=dte)).date(),
-                    "optionType": "call",
-                    "volume": 100.0,
-                    "openInterest": 250.0,
-                    "marketPrice": quoted_market_price,
-                    "spreadRatio": 0.05,
-                    "confidenceLevel": "high",
-                    "qualityFlags": "none",
-                    "includeInSurface": True,
-                }
-            )
-    return pd.DataFrame(rows)
+def _build_selected_iv_surface_input(selected_iv: float):
+    return pd.DataFrame(
+        [
+            {
+                "strike": strike,
+                "days_to_expiration": dte,
+                "time_to_expiration_years": dte / 365.25,
+                "impliedVolatilityFinal": selected_iv,
+                "optionType": "call",
+                "forwardPrice": 100.0 * np.exp(0.02 * dte / 365.25),
+                "dividendYieldUsed": 0.0,
+                "surfaceWeight": 1.0,
+                "volume": 100.0,
+                "openInterest": 250.0,
+                "spreadRatio": 0.05,
+                "confidenceLevel": "high",
+                "includeInSurface": True,
+            }
+            for dte in [20, 45]
+            for strike in [90.0, 95.0, 100.0, 105.0, 110.0]
+        ]
+    )
 
 
-def test_surface_construction_uses_selected_iv_not_market_price_fallback():
-    low_iv_df = _build_selected_iv_surface_input(selected_iv=0.20, quoted_iv=0.20)
-    high_iv_df = _build_selected_iv_surface_input(selected_iv=0.35, quoted_iv=0.20)
+def test_surface_construction_uses_selected_iv():
+    low_iv_df = _build_selected_iv_surface_input(selected_iv=0.20)
+    high_iv_df = _build_selected_iv_surface_input(selected_iv=0.35)
 
-    _, _, _, _, low_nodes = _build_arbitrage_free_surface(
+    _, _, _, low_nodes = _build_arbitrage_free_surface(
         df=low_iv_df,
         underlying_price=100.0,
         risk_free_rate=0.02,
-        dividend_yield=0.0,
         dte_step=1,
     )
-    _, _, _, _, high_nodes = _build_arbitrage_free_surface(
+    _, _, _, high_nodes = _build_arbitrage_free_surface(
         df=high_iv_df,
         underlying_price=100.0,
         risk_free_rate=0.02,
-        dividend_yield=0.0,
         dte_step=1,
     )
 
@@ -199,7 +184,6 @@ def test_include_low_confidence_allows_valid_rows_marked_excluded():
 
     fig = create_vol_surface(
         df,
-        ticker="TEST",
         smooth=True,
         include_low_confidence=True,
         underlying_price=100.0,
@@ -208,64 +192,44 @@ def test_include_low_confidence_allows_valid_rows_marked_excluded():
     assert len(fig.data) >= 1
 
 
-def test_create_vol_surface_tolerates_missing_optional_market_and_liquidity_columns():
-    now = datetime.now(timezone.utc)
-    df = pd.DataFrame(
-        [
-            {
-                "strike": 100.0,
-                "days_to_expiration": 30,
-                "time_to_expiration_years": 30.0 / 365.25,
-                "impliedVolatilityFinal": 0.22,
-                "expirationDate": (now + timedelta(days=30)).date(),
-                "optionType": "call",
-                "includeInSurface": True,
-            }
-        ]
-    )
-
-    fig = create_vol_surface(
-        df,
-        ticker="TEST",
-        smooth=False,
-        underlying_price=100.0,
-    )
-
-    assert len(fig.data) == 1
-
-
-def test_create_vol_surface_honors_requested_dte_axis_range():
+def test_create_vol_surface_supports_zero_dte_with_positive_time_remaining():
     df = _build_surface_input()
+    zero_dte = df["days_to_expiration"] == 10
+    df.loc[zero_dte, "days_to_expiration"] = 0
+    df.loc[zero_dte, "time_to_expiration_years"] = 6.0 / (24.0 * 365.25)
 
     fig = create_vol_surface(
         df,
-        ticker="TEST",
         smooth=False,
         underlying_price=100.0,
-        dte_range=(7, 60),
+        dte_range=(0, 30),
     )
 
-    assert list(fig.layout.scene.yaxis.range) == [7, 60]
+    spot_trace = next(trace for trace in fig.data if trace.name == "Current Spot")
+    assert 0.0 in list(spot_trace.y)
+    assert list(fig.layout.scene.yaxis.range) == [0, 30]
 
 
-def test_create_vol_surface_honors_requested_strike_axis_range():
-    df = _build_surface_input()
-
+@pytest.mark.parametrize(
+    ("range_arg", "axis", "expected"),
+    [
+        ({"dte_range": (7, 60)}, "yaxis", [7, 60]),
+        ({"strike_range": (93.0, 107.0)}, "xaxis", [93.0, 107.0]),
+    ],
+    ids=["dte", "strike"],
+)
+def test_create_vol_surface_honors_requested_axis_range(range_arg, axis, expected):
     fig = create_vol_surface(
-        df,
-        ticker="TEST",
-        smooth=False,
-        underlying_price=100.0,
-        strike_range=(93.0, 107.0),
+        _build_surface_input(), smooth=False, underlying_price=100.0, **range_arg
     )
 
-    assert list(fig.layout.scene.xaxis.range) == [93.0, 107.0]
+    assert list(getattr(fig.layout.scene, axis).range) == expected
 
 
 def test_create_vol_surface_leaves_title_to_web_shell():
     df = _build_surface_input()
 
-    fig = create_vol_surface(df, ticker="TEST", smooth=True, underlying_price=100.0)
+    fig = create_vol_surface(df, smooth=True, underlying_price=100.0)
 
     assert fig.layout.title.text is None
     assert fig.layout.paper_bgcolor == "#101a2a"

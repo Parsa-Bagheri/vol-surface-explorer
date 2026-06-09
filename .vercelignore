@@ -1,10 +1,16 @@
 .git
+.cache
 .pytest_cache
 .ruff_cache
+.venv
 .vscode
 __pycache__
 **/__pycache__
 **/*.pyc
+*.log
 *_vol_surface_*.html
 tests
 environment.yml
+AGENT_HANDOFF.md
+Agent Handoff.md
+UI_UX_IMPROVEMENT_IDEAS.md

@@ -1,8 +1,9 @@
 import pandas as pd
 import plotly.graph_objects as go
+import pytest
 
 import src.surface_service as surface_service
-from src.surface_service import SurfaceRequest
+from src.surface_service import SurfaceRequest, _validated_request
 
 
 def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot(monkeypatch):
@@ -17,7 +18,6 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
                 "impliedVolatilityFinal": 0.22,
                 "optionType": "call",
                 "includeInSurface": True,
-                "marketPrice": 1.0,
                 "dividendYieldUsed": 0.0,
             }
         ]
@@ -30,12 +30,12 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
         captured["fetch_as_of_utc"] = as_of_utc
         return raw_df.copy()
 
-    def fake_prepare_options_data(options_df, min_dte, max_dte, as_of_utc, **kwargs):
+    def fake_prepare_options_data(_options_df, min_dte, max_dte, as_of_utc, **kwargs):
         captured["clean_dte_range"] = (min_dte, max_dte)
         captured["clean_as_of_utc"] = as_of_utc
         return cleaned_df.copy()
 
-    def fake_create_vol_surface(df, ticker, dte_range, **kwargs):
+    def fake_create_vol_surface(df, dte_range, **kwargs):
         captured["plot_dte_range"] = dte_range
         captured["plot_strike_range"] = kwargs["strike_range"]
         return go.Figure()
@@ -45,7 +45,7 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
     monkeypatch.setattr(
         surface_service,
         "build_diagnostics_report",
-        lambda cleaned, raw_row_count: {
+        lambda cleaned: {
             "rows_surface_included": len(cleaned),
             "surface_dte_min": int(cleaned["days_to_expiration"].min()),
             "surface_dte_max": int(cleaned["days_to_expiration"].max()),
@@ -53,14 +53,26 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
     )
     monkeypatch.setattr(surface_service, "create_vol_surface", fake_create_vol_surface)
 
-    result = surface_service.build_surface_bundle(
-        SurfaceRequest(ticker="XLY", dte_min=7, dte_max=60)
-    )
+    surface_service.build_surface_bundle(SurfaceRequest(ticker="XLY", dte_min=7, dte_max=60))
 
     assert captured["fetch_dte_range"] == (7, 60)
     assert captured["clean_dte_range"] == (7, 60)
     assert captured["plot_dte_range"] == (7, 60)
-    assert captured["plot_strike_range"] == (93.0, 107.0)
+    assert captured["plot_strike_range"] == pytest.approx((90.0, 110.0))
     assert captured["fetch_as_of_utc"] == captured["clean_as_of_utc"]
-    assert result.diagnostics["internal_validation"]["requested_dte_min"] == 7
-    assert result.diagnostics["internal_validation"]["requested_dte_max"] == 60
+
+
+def test_surface_request_accepts_zero_dte():
+    request = _validated_request(SurfaceRequest(ticker="SPY", dte_min=0, dte_max=0))
+
+    assert request.dte_min == 0
+    assert request.dte_max == 0
+
+
+def test_surface_request_defaults_allow_zero_dte():
+    request = SurfaceRequest(ticker="SPY")
+
+    assert request.strike_min_pct == 0.90
+    assert request.strike_max_pct == 1.10
+    assert request.dte_min == 0
+    assert request.dte_max == 60

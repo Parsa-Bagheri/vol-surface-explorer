@@ -74,7 +74,7 @@ def _fake_chain(expiration):
     return SimpleNamespace(calls=calls, puts=puts)
 
 
-def test_get_options_data_records_available_expirations_outside_requested_dte_range(monkeypatch):
+def test_get_options_data_fetches_only_expirations_inside_requested_dte_range(monkeypatch):
     class FakeTicker:
         options = (
             "2026-05-15",
@@ -99,17 +99,43 @@ def test_get_options_data_records_available_expirations_outside_requested_dte_ra
         as_of_utc=pd.Timestamp("2026-05-11T03:50:46Z"),
     )
 
-    diagnostics = result.attrs["fetchDiagnostics"]
-    assert [
-        item["days_to_expiration"] for item in diagnostics["selected_expirations"]
-    ] == [12, 19, 26, 33, 39]
-    assert [
-        item["days_to_expiration"] for item in diagnostics["available_expirations"]
-    ] == [5, 12, 19, 26, 33, 39, 68]
-    assert sorted(result["expirationDteAtFetch"].unique().tolist()) == [
-        12,
-        19,
-        26,
-        33,
-        39,
+    assert sorted(result["expirationDate"].dt.strftime("%Y-%m-%d").unique().tolist()) == [
+        "2026-05-22",
+        "2026-05-29",
+        "2026-06-05",
+        "2026-06-12",
+        "2026-06-18",
+    ]
+    assert set(result.columns) == {
+        "strike",
+        "volume",
+        "openInterest",
+        "bid",
+        "ask",
+        "lastPrice",
+        "lastTradeDate",
+        "expirationDate",
+        "optionType",
+    }
+
+
+def test_get_options_data_fetches_same_day_expiration_before_close(monkeypatch):
+    class FakeTicker:
+        options = ("2026-05-15", "2026-05-22")
+
+        def option_chain(self, expiration):
+            return _fake_chain(expiration)
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", lambda ticker: FakeTicker())
+
+    result = data_fetch.get_options_data(
+        "XLY",
+        retry_on_poor_quality=False,
+        min_dte=0,
+        max_dte=0,
+        as_of_utc=pd.Timestamp("2026-05-15T14:00:00Z"),
+    )
+
+    assert result["expirationDate"].dt.strftime("%Y-%m-%d").unique().tolist() == [
+        "2026-05-15"
     ]

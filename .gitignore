@@ -179,3 +179,8 @@ cython_debug/
 # Generated volatility surface exports
 *_vol_surface_*.html
 .vercel
+
+# Local AI-agent working notes
+AGENT_HANDOFF.md
+Agent Handoff.md
+UI_UX_IMPROVEMENT_IDEAS.md

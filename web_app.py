@@ -5,15 +5,27 @@ from typing import Any, Callable, Dict
 
 from flask import Flask, render_template, request
 
-from src.surface_service import SurfaceBuildResult, SurfaceRequest, build_surface_bundle
+from src.surface_service import (
+    DEFAULT_DTE_MIN,
+    DEFAULT_DTE_MAX,
+    DEFAULT_STRIKE_MAX_PCT,
+    DEFAULT_STRIKE_MIN_PCT,
+    MAX_DTE,
+    MAX_STRIKE_PCT,
+    MIN_DTE,
+    MIN_STRIKE_PCT,
+    SurfaceBuildResult,
+    SurfaceRequest,
+    build_surface_bundle,
+)
 
 
 DEFAULT_FORM_VALUES = {
     "ticker": "",
-    "strike_min_pct": 93,
-    "strike_max_pct": 107,
-    "dte_min": 7,
-    "dte_max": 60,
+    "strike_min_pct": round(DEFAULT_STRIKE_MIN_PCT * 100),
+    "strike_max_pct": round(DEFAULT_STRIKE_MAX_PCT * 100),
+    "dte_min": DEFAULT_DTE_MIN,
+    "dte_max": DEFAULT_DTE_MAX,
     "smooth": True,
 }
 
@@ -59,7 +71,7 @@ def _parse_bool_arg(name: str, default: bool) -> bool:
     raw_values = request.args.getlist(name)
     if not raw_values:
         return bool(default)
-    return any(str(value).lower() in {"1", "true", "on", "yes"} for value in raw_values)
+    return "1" in raw_values
 
 
 def _form_values() -> Dict[str, Any]:
@@ -68,13 +80,23 @@ def _form_values() -> Dict[str, Any]:
     return {
         "ticker": ticker,
         "strike_min_pct": _parse_int_arg(
-            "strike_min_pct", int(DEFAULT_FORM_VALUES["strike_min_pct"]), 50, 150
+            "strike_min_pct",
+            int(DEFAULT_FORM_VALUES["strike_min_pct"]),
+            round(MIN_STRIKE_PCT * 100),
+            round(MAX_STRIKE_PCT * 100),
         ),
         "strike_max_pct": _parse_int_arg(
-            "strike_max_pct", int(DEFAULT_FORM_VALUES["strike_max_pct"]), 50, 150
+            "strike_max_pct",
+            int(DEFAULT_FORM_VALUES["strike_max_pct"]),
+            round(MIN_STRIKE_PCT * 100),
+            round(MAX_STRIKE_PCT * 100),
         ),
-        "dte_min": _parse_int_arg("dte_min", int(DEFAULT_FORM_VALUES["dte_min"]), 1, 365),
-        "dte_max": _parse_int_arg("dte_max", int(DEFAULT_FORM_VALUES["dte_max"]), 1, 365),
+        "dte_min": _parse_int_arg(
+            "dte_min", int(DEFAULT_FORM_VALUES["dte_min"]), MIN_DTE, MAX_DTE
+        ),
+        "dte_max": _parse_int_arg(
+            "dte_max", int(DEFAULT_FORM_VALUES["dte_max"]), MIN_DTE, MAX_DTE
+        ),
         "smooth": _parse_bool_arg("smooth", bool(DEFAULT_FORM_VALUES["smooth"])),
     }
 
@@ -87,21 +109,21 @@ def _dte_range_label(min_value: Any, max_value: Any) -> str:
 
 def _surface_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
     diagnostics = result.diagnostics
-    request_diagnostics = diagnostics.get("request", {})
+    request_diagnostics = diagnostics["request"]
     return [
         {"label": "Spot", "value": f"${result.current_price:,.2f}"},
         {
             "label": "Requested DTE",
             "value": _dte_range_label(
-                request_diagnostics.get("dte_min"),
-                request_diagnostics.get("dte_max"),
+                request_diagnostics["dte_min"],
+                request_diagnostics["dte_max"],
             ),
         },
         {
             "label": "Available DTE",
             "value": _dte_range_label(
-                diagnostics.get("surface_dte_min"),
-                diagnostics.get("surface_dte_max"),
+                diagnostics["surface_dte_min"],
+                diagnostics["surface_dte_max"],
             ),
         },
     ]
@@ -109,27 +131,24 @@ def _surface_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
 
 def _advanced_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
     diagnostics = result.diagnostics
-    internal_validation = diagnostics.get("internal_validation", {})
     return [
-        {"label": "Raw Contracts", "value": f"{len(result.raw_options_df):,}"},
         {
-            "label": "Surface Quotes",
-            "value": f"{diagnostics.get('rows_surface_included', 0):,}",
-        },
-        {"label": "Retained Rows", "value": f"{diagnostics.get('rows_retained', 0):,}"},
-        {
-            "label": "Excluded Rows",
-            "value": f"{diagnostics.get('rows_surface_excluded', 0):,}",
+            "label": "Raw Contracts",
+            "value": f"{diagnostics['rows_retained']:,}",
         },
         {
-            "label": "Repricing MAE",
-            "value": (
-                f"{float(internal_validation.get('repricing_mae')):.4f}"
-                if internal_validation.get("repricing_mae") is not None
-                else "n/a"
-            ),
+            "label": "Filtered Contracts",
+            "value": f"{diagnostics['rows_surface_included']:,}",
         },
     ]
+
+
+def _apply_security_headers(response):
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    if request.endpoint == "index":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def create_app(
@@ -137,14 +156,7 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 1024
-
-    @app.after_request
-    def apply_security_headers(response):
-        for header, value in SECURITY_HEADERS.items():
-            response.headers.setdefault(header, value)
-        if request.endpoint == "index":
-            response.headers["Cache-Control"] = "no-store"
-        return response
+    app.after_request(_apply_security_headers)
 
     @app.route("/", methods=["GET"])
     def index():
@@ -165,7 +177,6 @@ def create_app(
                         dte_min=int(values["dte_min"]),
                         dte_max=int(values["dte_max"]),
                         smooth=bool(values["smooth"]),
-                        quality_mode="lenient",
                     )
                 )
                 plot_html = result.figure.to_html(
