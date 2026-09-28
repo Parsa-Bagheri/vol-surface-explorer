@@ -179,3 +179,10 @@ cython_debug/
 # Generated volatility surface exports
 *_vol_surface_*.html
 .vercel
+
+.tmp_pytest/
+
+# Local upload scratch files and private design notes
+.tmp.driveupload/
+UI_UX_IMPROVEMENT_IDEAS.md
+UI_UX_improvements_ideas.md
