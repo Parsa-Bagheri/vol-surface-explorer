@@ -10,4 +10,5 @@ __pycache__
 **/*.pyc
 *_vol_surface_*.html
 tests
+docs
 environment.yml
