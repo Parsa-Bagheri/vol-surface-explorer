@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import os
+import hashlib
+from pathlib import Path
 from typing import Any, Callable, Dict
 
 from flask import Flask, render_template, request
 from src.ticker_validation import validate_ticker_symbol as _validate_ticker_symbol
+from src.surface_config import (
+    DEFAULT_WEB_DTE_MIN, MAX_DTE, MAX_STRIKE_PCT, MIN_DTE, MIN_STRIKE_PCT, SurfaceRequest,
+)
 
 
 DEFAULT_FORM_VALUES = {
     "ticker": "",
-    "strike_min_pct": 93,
-    "strike_max_pct": 107,
-    "dte_min": 7,
-    "dte_max": 60,
-    "smooth": True,
+    "strike_min_pct": round(SurfaceRequest.strike_min_pct * 100),
+    "strike_max_pct": round(SurfaceRequest.strike_max_pct * 100),
+    "dte_min": DEFAULT_WEB_DTE_MIN,
+    "dte_max": SurfaceRequest.dte_max,
+    "smooth": SurfaceRequest.smooth,
 }
 
 SECURITY_HEADERS = {
@@ -46,8 +51,6 @@ def _default_surface_builder(request: Any) -> Any:
 
 
 def _surface_request(**kwargs: Any) -> Any:
-    from src.surface_service import SurfaceRequest
-
     return SurfaceRequest(**kwargs)
 
 
@@ -78,13 +81,15 @@ def _form_values() -> Dict[str, Any]:
     return {
         "ticker": ticker,
         "strike_min_pct": _parse_int_arg(
-            "strike_min_pct", int(DEFAULT_FORM_VALUES["strike_min_pct"]), 50, 150
+            "strike_min_pct", int(DEFAULT_FORM_VALUES["strike_min_pct"]),
+            round(MIN_STRIKE_PCT * 100), round(MAX_STRIKE_PCT * 100),
         ),
         "strike_max_pct": _parse_int_arg(
-            "strike_max_pct", int(DEFAULT_FORM_VALUES["strike_max_pct"]), 50, 150
+            "strike_max_pct", int(DEFAULT_FORM_VALUES["strike_max_pct"]),
+            round(MIN_STRIKE_PCT * 100), round(MAX_STRIKE_PCT * 100),
         ),
-        "dte_min": _parse_int_arg("dte_min", int(DEFAULT_FORM_VALUES["dte_min"]), 1, 365),
-        "dte_max": _parse_int_arg("dte_max", int(DEFAULT_FORM_VALUES["dte_max"]), 1, 365),
+        "dte_min": _parse_int_arg("dte_min", int(DEFAULT_FORM_VALUES["dte_min"]), MIN_DTE, MAX_DTE),
+        "dte_max": _parse_int_arg("dte_max", int(DEFAULT_FORM_VALUES["dte_max"]), MIN_DTE, MAX_DTE),
         "smooth": _parse_bool_arg("smooth", bool(DEFAULT_FORM_VALUES["smooth"])),
     }
 
@@ -134,6 +139,10 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 1024
+    asset_versions = {
+        name: hashlib.sha256((Path(app.static_folder) / name).read_bytes()).hexdigest()[:12]
+        for name in ("app.css", "app.js")
+    }
 
     @app.after_request
     def apply_security_headers(response):
@@ -193,6 +202,9 @@ def create_app(
         return render_template(
             "index.html",
             values=values,
+            min_dte=MIN_DTE,
+            max_dte=MAX_DTE,
+            asset_versions=asset_versions,
             plot_html=plot_html,
             diagnostics=diagnostics,
             surface_cards=surface_cards,

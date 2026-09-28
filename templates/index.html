@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Volatility Surface Explorer</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
-  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=asset_versions['app.css']) }}">
+  <script src="{{ url_for('static', filename='app.js', v=asset_versions['app.js']) }}" defer></script>
 </head>
 <body>
   <div class="app-shell">
@@ -37,20 +37,20 @@
         </div>
       </section>
 
-      <section class="field-group range-control" data-range-control data-min-gap="1">
+      <section class="field-group range-control" data-range-control data-min-gap="0">
         <div class="field-heading">
           <span>DTE Range</span>
           <div class="range-values" aria-label="DTE range values">
-            <input class="range-number" id="dte-min-value" name="dte_min" type="number" min="1" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum days to expiration">
+            <input class="range-number" id="dte-min-value" name="dte_min" type="number" min="{{ min_dte }}" max="{{ max_dte }}" step="1" value="{{ values.dte_min }}" aria-label="Minimum days to expiration">
             <span>to</span>
-            <input class="range-number" id="dte-max-value" name="dte_max" type="number" min="1" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum days to expiration">
+            <input class="range-number" id="dte-max-value" name="dte_max" type="number" min="{{ min_dte }}" max="{{ max_dte }}" step="1" value="{{ values.dte_max }}" aria-label="Maximum days to expiration">
             <span>days</span>
           </div>
         </div>
         <div class="dual-range" style="--range-min: 0%; --range-max: 100%;">
           <div class="range-track"><span class="range-fill"></span></div>
-          <input class="range-thumb range-thumb-min" id="dte-min" type="range" min="1" max="365" step="1" value="{{ values.dte_min }}" aria-label="Minimum DTE slider">
-          <input class="range-thumb range-thumb-max" id="dte-max" type="range" min="1" max="365" step="1" value="{{ values.dte_max }}" aria-label="Maximum DTE slider">
+          <input class="range-thumb range-thumb-min" id="dte-min" type="range" min="{{ min_dte }}" max="{{ max_dte }}" step="1" value="{{ values.dte_min }}" aria-label="Minimum DTE slider">
+          <input class="range-thumb range-thumb-max" id="dte-max" type="range" min="{{ min_dte }}" max="{{ max_dte }}" step="1" value="{{ values.dte_max }}" aria-label="Maximum DTE slider">
         </div>
       </section>
 

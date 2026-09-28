@@ -9,7 +9,7 @@ from scipy.optimize import brentq
 from scipy.special import ndtr
 
 from src.time_utils import expiration_close_utc as option_expiration_close_utc
-from src.time_utils import normalize_as_of_utc
+from src.time_utils import expiration_dtes, normalize_as_of_utc
 
 
 MAX_REASONABLE_IV = 5.0
@@ -92,27 +92,28 @@ def _black_scholes_price_from_terms(
 
 
 def _black_scholes_prices_array(
-    option_types: np.ndarray,
+    option_types: np.ndarray | str,
     spot: float,
     strikes: np.ndarray,
-    time_to_expiration: np.ndarray,
+    time_to_expiration: np.ndarray | float,
     risk_free_rate: float,
-    volatility: np.ndarray,
-    dividend_yield: np.ndarray,
+    volatility: np.ndarray | float,
+    dividend_yield: np.ndarray | float,
 ) -> np.ndarray:
-    option_types = np.asarray(option_types, dtype=object)
     strikes = np.asarray(strikes, dtype=float)
-    time_to_expiration = np.asarray(time_to_expiration, dtype=float)
-    volatility = np.asarray(volatility, dtype=float)
-    dividend_yield = np.asarray(dividend_yield, dtype=float)
     prices = np.full(strikes.shape, np.nan, dtype=float)
-    if (
-        option_types.shape != strikes.shape
-        or strikes.shape != time_to_expiration.shape
-        or strikes.shape != volatility.shape
-        or strikes.shape != dividend_yield.shape
-        or spot <= 0
-    ):
+    if not np.isfinite(spot) or spot <= 0:
+        return prices
+    try:
+        option_types = np.broadcast_to(np.asarray(option_types, dtype=object), strikes.shape)
+        time_to_expiration = np.broadcast_to(
+            np.asarray(time_to_expiration, dtype=float), strikes.shape
+        )
+        volatility = np.broadcast_to(np.asarray(volatility, dtype=float), strikes.shape)
+        dividend_yield = np.broadcast_to(
+            np.asarray(dividend_yield, dtype=float), strikes.shape
+        )
+    except ValueError:
         return prices
 
     is_call = option_types == "call"
@@ -467,14 +468,13 @@ def _estimate_forward_terms(
 ) -> pd.DataFrame:
     """Estimate expiry-level forwards from put-call parity when quotes are usable."""
     forward_df = df.copy()
-    forward_df["forwardPrice"] = forward_df["time_to_expiration_years"].apply(
-        lambda t: _fallback_forward_price(
-            spot=underlying_price,
-            time_to_expiration=_to_float(t),
-            risk_free_rate=risk_free_rate,
-            dividend_yield=fallback_dividend_yield,
+    times = pd.to_numeric(forward_df["time_to_expiration_years"], errors="coerce")
+    forward_df["forwardPrice"] = np.nan
+    valid_times = np.isfinite(times) & (times > 0)
+    if np.isfinite(underlying_price) and underlying_price > 0:
+        forward_df.loc[valid_times, "forwardPrice"] = underlying_price * np.exp(
+            (risk_free_rate - fallback_dividend_yield) * times[valid_times]
         )
-    )
     forward_df["dividendYieldUsed"] = float(fallback_dividend_yield)
     forward_df["forwardEstimationMethod"] = "configured_dividend_yield"
 
@@ -839,12 +839,12 @@ def prepare_options_data(
         expiration_close_times_utc - as_of_utc
     ).dt.total_seconds() / (24.0 * 60.0 * 60.0)
     clean_df["time_to_expiration_years"] = remaining_days / 365.25
-    clean_df["days_to_expiration"] = np.ceil(remaining_days).astype("Int64")
+    clean_df["days_to_expiration"] = expiration_dtes(expiration_utc, as_of_utc)
 
     clean_df = clean_df.replace([np.inf, -np.inf], np.nan)
     clean_df = clean_df.dropna(subset=["expirationDate", "strike", "days_to_expiration"])
     clean_df = clean_df[clean_df["strike"] > 0]
-    clean_df = clean_df[clean_df["days_to_expiration"] > 0]
+    clean_df = clean_df[clean_df["days_to_expiration"] >= 0]
     clean_df = clean_df[clean_df["time_to_expiration_years"] > 0]
 
     if min_strike is not None:

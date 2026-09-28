@@ -13,33 +13,19 @@ from src.data_cleaner import (
 )
 from src.data_fetch import get_current_price, get_options_data
 from src.time_utils import normalize_as_of_utc
-from src.visualizer import create_vol_surface
+from src.visualizer import create_vol_surface, select_surface_quotes
 from src.ticker_validation import validate_ticker_symbol
 from src.contract_outcomes import build_contract_outcomes
-
-
-VALID_QUALITY_MODES = {"strict", "balanced", "lenient"}
-MIN_STRIKE_PCT = 0.50
-MAX_STRIKE_PCT = 1.50
-MIN_DTE = 1
-MAX_DTE = 365
-MIN_MAX_TRADE_AGE_HOURS = 1.0
-MAX_MAX_TRADE_AGE_HOURS = 24.0 * 14.0
-
-
-@dataclass(frozen=True)
-class SurfaceRequest:
-    ticker: str
-    strike_min_pct: float = 0.93
-    strike_max_pct: float = 1.07
-    dte_min: int = 1
-    dte_max: int = 60
-    smooth: bool = True
-    risk_free_rate: float = 0.02
-    dividend_yield: float = 0.0
-    quality_mode: str = "lenient"
-    max_trade_age_hours: float = 120.0
-    include_low_confidence: bool = False
+from src.surface_config import (
+    MAX_DTE,
+    MAX_MAX_TRADE_AGE_HOURS,
+    MAX_STRIKE_PCT,
+    MIN_DTE,
+    MIN_MAX_TRADE_AGE_HOURS,
+    MIN_STRIKE_PCT,
+    VALID_QUALITY_MODES,
+    SurfaceRequest,
+)
 
 
 @dataclass
@@ -79,8 +65,6 @@ def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
 
     dte_min = int(request.dte_min)
     dte_max = int(request.dte_max)
-    if dte_min < 1 or dte_max < 1:
-        raise ValueError("DTE bounds must be at least 1 day.")
     if dte_min > dte_max:
         dte_min, dte_max = dte_max, dte_min
     if dte_min < MIN_DTE or dte_max > MAX_DTE:
@@ -167,6 +151,16 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
             "No suitable options remained after filtering. Adjust the strike or DTE range."
         )
 
+    surface_input = cleaned_options_df
+    if not validated_request.include_low_confidence:
+        surface_input = surface_input[
+            surface_input["includeInSurface"].fillna(False).astype(bool)
+        ]
+    selected_quotes = select_surface_quotes(
+        surface_input, current_price,
+        validated_request.risk_free_rate, validated_request.dividend_yield,
+    )
+
     diagnostics = build_diagnostics_report(
         cleaned_options_df,
         raw_row_count=len(raw_options_df),
@@ -185,7 +179,8 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
     }
     diagnostics["fetch"] = raw_options_df.attrs.get("fetchDiagnostics", {})
     diagnostics["contract_outcomes"] = build_contract_outcomes(
-        raw_options_df, cleaned_options_df, validated_request, current_price
+        raw_options_df, cleaned_options_df, validated_request, current_price,
+        selected_quotes=selected_quotes,
     )
     diagnostics["internal_validation"] = build_internal_validation_report(
         cleaned_options_df,
@@ -205,6 +200,7 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         dividend_yield=validated_request.dividend_yield,
         strike_range=(min_strike_abs, max_strike_abs),
         dte_range=(validated_request.dte_min, validated_request.dte_max),
+        selected_quotes=selected_quotes,
     )
 
     return SurfaceBuildResult(

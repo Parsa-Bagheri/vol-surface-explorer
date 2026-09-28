@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 import src.data_fetch as data_fetch
 
@@ -113,3 +114,33 @@ def test_get_options_data_records_available_expirations_outside_requested_dte_ra
         33,
         39,
     ]
+
+
+@pytest.mark.parametrize("as_of,expected_fetches", [
+    ("2026-09-28T19:00:00Z", ["2026-09-28"]),
+    ("2026-09-28T20:00:00Z", []),
+    ("2026-09-28T21:00:00Z", []),
+    ("2026-12-14T20:00:00Z", ["2026-12-14"]),
+    ("2026-12-14T21:00:00Z", []),
+])
+def test_zero_day_fetch_only_includes_unexpired_chains(monkeypatch, as_of, expected_fetches):
+    fetched = []
+    expiry = as_of[:10]
+
+    class FakeTicker:
+        options = (expiry,)
+
+        def option_chain(self, expiration):
+            fetched.append(expiration)
+            return _fake_chain(expiration)
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", lambda ticker: FakeTicker())
+    result = data_fetch.get_options_data(
+        "SPY", retry_on_poor_quality=False, min_dte=0, max_dte=0,
+        as_of_utc=pd.Timestamp(as_of),
+    )
+    assert fetched == expected_fetches
+    if expected_fetches:
+        assert result["expirationDteAtFetch"].unique().tolist() == [0]
+    else:
+        assert result.empty

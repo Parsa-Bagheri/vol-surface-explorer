@@ -39,6 +39,7 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
     def fake_create_vol_surface(df, ticker, dte_range, **kwargs):
         captured["plot_dte_range"] = dte_range
         captured["plot_strike_range"] = kwargs["strike_range"]
+        captured["selected_quotes"] = kwargs["selected_quotes"]
         return go.Figure()
 
     monkeypatch.setattr(surface_service, "get_options_data", fake_get_options_data)
@@ -53,6 +54,13 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
         },
     )
     monkeypatch.setattr(surface_service, "create_vol_surface", fake_create_vol_surface)
+    original_select = surface_service.select_surface_quotes
+
+    def counting_select(*args, **kwargs):
+        captured["selection_calls"] = captured.get("selection_calls", 0) + 1
+        return original_select(*args, **kwargs)
+
+    monkeypatch.setattr(surface_service, "select_surface_quotes", counting_select)
 
     result = surface_service.build_surface_bundle(
         SurfaceRequest(ticker="XLY", dte_min=7, dte_max=60)
@@ -65,3 +73,6 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
     assert captured["fetch_as_of_utc"] == captured["clean_as_of_utc"]
     assert result.diagnostics["internal_validation"]["requested_dte_min"] == 7
     assert result.diagnostics["internal_validation"]["requested_dte_max"] == 60
+    assert captured["selection_calls"] == 1
+    assert captured["selected_quotes"].contractId.tolist() == [0]
+    assert result.diagnostics["contract_outcomes"]["used"] == len(captured["selected_quotes"])

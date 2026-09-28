@@ -252,7 +252,9 @@ def get_options_data(
                 "days_to_expiration": expiration_days,
             }
         )
-        if expiration_days is None or expiration_days <= 0:
+        if expiration_days is None or expiration_days < 0:
+            continue
+        if expiration_close_utc(date) <= now_utc:
             continue
         if min_dte is not None and expiration_days < int(min_dte):
             continue

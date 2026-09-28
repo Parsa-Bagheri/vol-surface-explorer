@@ -5,6 +5,7 @@ import pandas as pd
 
 from src.data_cleaner import _black_scholes_price
 from src.visualizer import _build_arbitrage_free_surface, create_vol_surface
+import src.visualizer as visualizer
 
 
 def _build_surface_input():
@@ -66,6 +67,32 @@ def test_unified_surface_collapses_call_and_put_quotes_into_one_node_per_strike_
     )
     assert preferred_side_by_strike[95.0] == "put"
     assert preferred_side_by_strike[105.0] == "call"
+
+
+def test_zero_day_nodes_are_rendered_with_positive_pricing_time():
+    df = _build_surface_input().query("days_to_expiration == 10").copy()
+    df["days_to_expiration"] = 0
+    df["time_to_expiration_years"] = 2 / (365.25 * 24)
+    figure = create_vol_surface(df, "TEST", smooth=False, underlying_price=100.0, dte_range=(0, 0))
+    assert figure.data
+    assert set(figure.data[0].y) == {0}
+    assert np.isfinite(np.asarray(figure.data[0].z, dtype=float)).all()
+
+
+def test_plotting_reuses_selection_without_mutating_it(monkeypatch):
+    df = _build_surface_input()
+    selected = visualizer.select_surface_quotes(df, 100.0, 0.02, 0.0)
+    original = selected.copy(deep=True)
+
+    def unexpected_selection(*args):
+        raise AssertionError("The service already selected the quotes")
+
+    monkeypatch.setattr(visualizer, "select_surface_quotes", unexpected_selection)
+    figure = create_vol_surface(
+        df, "TEST", smooth=True, underlying_price=100.0, selected_quotes=selected,
+    )
+    assert figure.data and figure.data[0].type == "surface"
+    pd.testing.assert_frame_equal(selected, original)
 
 
 def test_arbitrage_free_surface_projection_enforces_discrete_static_arbitrage():

@@ -6,7 +6,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy.optimize import Bounds, LinearConstraint, minimize
-from scipy.special import ndtr
 
 from src.data_cleaner import (
     _black_scholes_price,
@@ -34,45 +33,15 @@ def _black_scholes_call_prices_array(
     volatility: np.ndarray,
     dividend_yield: float,
 ) -> np.ndarray:
-    strikes = np.asarray(strikes, dtype=float)
-    volatility = np.asarray(volatility, dtype=float)
-    prices = np.full(strikes.shape, np.nan, dtype=float)
-    if (
-        time_to_expiration <= 0
-        or spot <= 0
-        or strikes.shape != volatility.shape
-    ):
-        return prices
-
-    discounted_spot = spot * np.exp(-dividend_yield * time_to_expiration)
-    discounted_strike = strikes * np.exp(-risk_free_rate * time_to_expiration)
-    valid = np.isfinite(strikes) & (strikes > 0) & np.isfinite(volatility) & (volatility >= 0)
-    zero_volatility = valid & (volatility == 0)
-    if np.any(zero_volatility):
-        prices[zero_volatility] = np.maximum(
-            0.0,
-            discounted_spot - discounted_strike[zero_volatility],
-        )
-
-    positive_volatility = valid & (volatility > 0)
-    if np.any(positive_volatility):
-        sqrt_t = np.sqrt(time_to_expiration)
-        vol_sqrt_t = volatility[positive_volatility] * sqrt_t
-        d1 = (
-            np.log(spot / strikes[positive_volatility])
-            + (
-                risk_free_rate
-                - dividend_yield
-                + 0.5 * volatility[positive_volatility] ** 2
-            )
-            * time_to_expiration
-        ) / vol_sqrt_t
-        d2 = d1 - vol_sqrt_t
-        prices[positive_volatility] = (
-            discounted_spot * ndtr(d1)
-            - discounted_strike[positive_volatility] * ndtr(d2)
-        )
-    return prices
+    return _black_scholes_prices_array(
+        option_types="call",
+        spot=spot,
+        strikes=strikes,
+        time_to_expiration=time_to_expiration,
+        risk_free_rate=risk_free_rate,
+        volatility=volatility,
+        dividend_yield=dividend_yield,
+    )
 
 
 def _forward_price(
@@ -292,6 +261,56 @@ def _project_call_price_slice(
     return initial
 
 
+def _project_total_variance_grid(
+    strike_grid: np.ndarray,
+    time_to_expiration: np.ndarray,
+    dividend_yields: np.ndarray,
+    weights: np.ndarray,
+    total_variance: np.ndarray,
+    underlying_price: float,
+    risk_free_rate: float,
+) -> np.ndarray:
+    for _ in range(ARBITRAGE_PROJECTION_ITERATIONS):
+        for row_index, row_strikes in enumerate(strike_grid):
+            row_time = float(time_to_expiration[row_index])
+            row_dividend_yield = float(dividend_yields[row_index])
+            row_volatility = np.sqrt(np.maximum(total_variance[row_index], 0.0) / row_time)
+            call_prices = _black_scholes_call_prices_array(
+                spot=underlying_price,
+                strikes=row_strikes,
+                time_to_expiration=row_time,
+                risk_free_rate=risk_free_rate,
+                volatility=row_volatility,
+                dividend_yield=row_dividend_yield,
+            )
+            projected_prices = _project_call_price_slice(
+                strikes=row_strikes,
+                call_prices=call_prices,
+                weights=weights[row_index],
+                spot=underlying_price,
+                time_to_expiration=row_time,
+                risk_free_rate=risk_free_rate,
+                dividend_yield=row_dividend_yield,
+            )
+            total_variance[row_index] = np.array(
+                [
+                    _implied_volatility(
+                        option_type="call",
+                        spot=underlying_price,
+                        strike=float(strike),
+                        time_to_expiration=row_time,
+                        risk_free_rate=risk_free_rate,
+                        market_price=float(price),
+                        dividend_yield=row_dividend_yield,
+                    ) ** 2 * row_time
+                    for strike, price in zip(row_strikes, projected_prices)
+                ],
+                dtype=float,
+            )
+        total_variance = np.maximum.accumulate(total_variance, axis=0)
+    return total_variance
+
+
 def select_surface_quotes(
     df: pd.DataFrame,
     underlying_price: float,
@@ -301,12 +320,13 @@ def select_surface_quotes(
     working_df = df.copy()
     working_df = working_df.replace([np.inf, -np.inf], np.nan)
     working_df = working_df.dropna(
-        subset=["strike", "days_to_expiration", "time_to_expiration_years", "optionType"]
+        subset=["strike", "days_to_expiration", "time_to_expiration_years", "optionType", "impliedVolatilityFinal"]
     )
     working_df = working_df[
         (working_df["strike"] > 0)
-        & (working_df["days_to_expiration"] > 0)
+        & (working_df["days_to_expiration"] >= 0)
         & (working_df["time_to_expiration_years"] > 0)
+        & (working_df["impliedVolatilityFinal"] > 0)
     ].copy()
     if working_df.empty:
         return pd.DataFrame()
@@ -415,9 +435,11 @@ def _build_surface_nodes(
     underlying_price: float,
     risk_free_rate: float,
     dividend_yield: float,
+    selected_quotes: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    selected_df = select_surface_quotes(
-        df, underlying_price, risk_free_rate, dividend_yield
+    selected_df = (
+        select_surface_quotes(df, underlying_price, risk_free_rate, dividend_yield)
+        if selected_quotes is None else selected_quotes.copy()
     )
     if selected_df.empty:
         return pd.DataFrame()
@@ -482,12 +504,14 @@ def _build_arbitrage_free_surface(
     dividend_yield: float,
     dte_step: int = 1,
     build_smooth_grid: bool = True,
+    selected_quotes: pd.DataFrame | None = None,
     ) -> Tuple[Dict[Tuple[int, float], float], np.ndarray, np.ndarray, np.ndarray, pd.DataFrame]:
     surface_nodes = _build_surface_nodes(
         df=df,
         underlying_price=underlying_price,
         risk_free_rate=risk_free_rate,
         dividend_yield=dividend_yield,
+        selected_quotes=selected_quotes,
     )
     if surface_nodes.empty:
         raise ValueError("No usable quotes available for static-arbitrage-adjusted surface construction.")
@@ -571,11 +595,13 @@ def _build_arbitrage_free_surface(
     dte_observed = np.array([item["days_to_expiration"] for item in slice_data], dtype=int)
     time_observed = np.array([item["time_to_expiration_years"] for item in slice_data], dtype=float)
     forward_observed = np.array([item["forward"] for item in slice_data], dtype=float)
+    dividend_yield_observed = np.array([item["dividend_yield"] for item in slice_data], dtype=float)
+    observed_strike_grid = forward_observed[:, None] * np.exp(k_grid)
 
     total_variance = np.full((len(slice_data), len(k_grid)), np.nan)
     evaluation_weights = np.full((len(slice_data), len(k_grid)), 0.25)
     for row_index, item in enumerate(slice_data):
-        evaluation_strikes = item["forward"] * np.exp(k_grid)
+        evaluation_strikes = observed_strike_grid[row_index]
         interpolated_prices = np.interp(
             evaluation_strikes,
             item["strikes"],
@@ -606,42 +632,15 @@ def _build_arbitrage_free_surface(
     if not np.all(np.isfinite(total_variance)):
         return slice_projected_iv, empty_grid, empty_grid, empty_grid, surface_nodes
 
-    for _ in range(ARBITRAGE_PROJECTION_ITERATIONS):
-        for row_index, item in enumerate(slice_data):
-            evaluation_strikes = item["forward"] * np.exp(k_grid)
-            row_volatility = np.sqrt(np.maximum(total_variance[row_index], 0.0) / item["time_to_expiration_years"])
-            call_prices = _black_scholes_call_prices_array(
-                spot=underlying_price,
-                strikes=evaluation_strikes,
-                time_to_expiration=float(item["time_to_expiration_years"]),
-                risk_free_rate=risk_free_rate,
-                volatility=row_volatility,
-                dividend_yield=float(item["dividend_yield"]),
-            )
-            projected_prices = _project_call_price_slice(
-                strikes=evaluation_strikes,
-                call_prices=call_prices,
-                weights=evaluation_weights[row_index],
-                spot=underlying_price,
-                time_to_expiration=float(item["time_to_expiration_years"]),
-                risk_free_rate=risk_free_rate,
-                dividend_yield=float(item["dividend_yield"]),
-            )
-            updated_total_variance = []
-            for strike, projected_price in zip(evaluation_strikes, projected_prices):
-                implied_volatility = _implied_volatility(
-                    option_type="call",
-                    spot=underlying_price,
-                    strike=float(strike),
-                    time_to_expiration=float(item["time_to_expiration_years"]),
-                    risk_free_rate=risk_free_rate,
-                    market_price=float(projected_price),
-                    dividend_yield=float(item["dividend_yield"]),
-                )
-                updated_total_variance.append(float(implied_volatility**2 * item["time_to_expiration_years"]))
-            total_variance[row_index] = np.array(updated_total_variance, dtype=float)
-
-        total_variance = np.maximum.accumulate(total_variance, axis=0)
+    total_variance = _project_total_variance_grid(
+        strike_grid=observed_strike_grid,
+        time_to_expiration=time_observed,
+        dividend_yields=dividend_yield_observed,
+        weights=evaluation_weights,
+        total_variance=total_variance,
+        underlying_price=underlying_price,
+        risk_free_rate=risk_free_rate,
+    )
 
     dte_step = max(int(dte_step), 1)
     dte_dense = np.arange(int(dte_observed.min()), int(dte_observed.max()) + dte_step, dte_step, dtype=int)
@@ -661,48 +660,16 @@ def _build_arbitrage_free_surface(
             dte_dense, dte_observed, evaluation_weights[:, column_index]
         )
 
-    grid_strike = np.empty((len(dte_dense), len(k_grid)), dtype=float)
-    for row_index, _ in enumerate(time_dense):
-        grid_strike[row_index] = forward_dense[row_index] * np.exp(k_grid)
-
-    for _ in range(ARBITRAGE_PROJECTION_ITERATIONS):
-        for row_index, time_to_expiration in enumerate(time_dense):
-            row_volatility = np.sqrt(
-                np.maximum(total_variance_dense[row_index], 0.0)
-                / max(float(time_to_expiration), np.finfo(float).eps)
-            )
-            call_prices = _black_scholes_call_prices_array(
-                spot=underlying_price,
-                strikes=grid_strike[row_index],
-                time_to_expiration=float(time_to_expiration),
-                risk_free_rate=risk_free_rate,
-                volatility=row_volatility,
-                dividend_yield=float(dividend_yield_dense[row_index]),
-            )
-            projected_prices = _project_call_price_slice(
-                strikes=grid_strike[row_index],
-                call_prices=call_prices,
-                weights=evaluation_weights_dense[row_index],
-                spot=underlying_price,
-                time_to_expiration=float(time_to_expiration),
-                risk_free_rate=risk_free_rate,
-                dividend_yield=float(dividend_yield_dense[row_index]),
-            )
-            updated_total_variance = []
-            for strike, projected_price in zip(grid_strike[row_index], projected_prices):
-                implied_volatility = _implied_volatility(
-                    option_type="call",
-                    spot=underlying_price,
-                    strike=float(strike),
-                    time_to_expiration=float(time_to_expiration),
-                    risk_free_rate=risk_free_rate,
-                    market_price=float(projected_price),
-                    dividend_yield=float(dividend_yield_dense[row_index]),
-                )
-                updated_total_variance.append(float(implied_volatility**2 * time_to_expiration))
-            total_variance_dense[row_index] = np.array(updated_total_variance, dtype=float)
-
-        total_variance_dense = np.maximum.accumulate(total_variance_dense, axis=0)
+    grid_strike = forward_dense[:, None] * np.exp(k_grid)
+    total_variance_dense = _project_total_variance_grid(
+        strike_grid=grid_strike,
+        time_to_expiration=time_dense,
+        dividend_yields=dividend_yield_dense,
+        weights=evaluation_weights_dense,
+        total_variance=total_variance_dense,
+        underlying_price=underlying_price,
+        risk_free_rate=risk_free_rate,
+    )
 
     grid_dte = np.repeat(dte_dense[:, None], len(k_grid), axis=1)
     iv_grid = np.sqrt(
@@ -803,6 +770,7 @@ def create_vol_surface(
     dividend_yield: float = 0.0,
     strike_range: Tuple[float, float] | None = None,
     dte_range: Tuple[int, int] | None = None,
+    selected_quotes: pd.DataFrame | None = None,
 ):
     """
     Create an interactive 3D volatility figure.
@@ -874,6 +842,7 @@ def create_vol_surface(
             dividend_yield=dividend_yield,
             dte_step=smooth_dte_step,
             build_smooth_grid=bool(smooth),
+            selected_quotes=selected_quotes,
         )
     except Exception as exc:
         print(f"Static-arbitrage-adjusted surface construction failed: {exc}")

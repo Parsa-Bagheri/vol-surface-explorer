@@ -315,6 +315,7 @@ body.is-loading .button-loading {
 
 .content-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   padding-top: 18px;
 }
@@ -389,6 +390,7 @@ body.is-loading .button-loading {
 
 .plot-wrapper {
   position: relative;
+  min-width: 0;
   width: min(100%, 1160px);
   aspect-ratio: 4 / 3;
   margin: 0 auto;
@@ -559,7 +561,7 @@ body.is-loading .error-card {
 
 .diagnostics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
   gap: 12px;
 }
 

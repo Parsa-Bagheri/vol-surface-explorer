@@ -49,6 +49,11 @@ def test_index_renders_empty_state():
     assert b"range-control" in response.data
     assert response.headers["X-Frame-Options"] == "DENY"
     assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+    assert response.headers["Cache-Control"] == "public, max-age=0"
+    assert "s-maxage=3600" in response.headers["Vercel-CDN-Cache-Control"]
+    assert b"Include .TO for TSX stocks." in response.data
+    assert b'/static/app.css?v=' in response.data
+    assert b'/static/app.js?v=' in response.data
 
 
 def test_index_builds_surface_from_query_params():
@@ -85,6 +90,8 @@ def test_index_builds_surface_from_query_params():
     assert captured["request"].dte_min == 14
     assert captured["request"].dte_max == 90
     assert captured["request"].smooth is True
+    assert response.headers["Cache-Control"] == "no-store"
+    assert "Vercel-CDN-Cache-Control" not in response.headers
 
 
 def test_index_has_no_iv_source_selector():
@@ -202,3 +209,36 @@ def test_vix_explains_unsupported_model_before_building(ticker):
     with pytest.raises(ValueError, match="VIX options exist"):
         from src.surface_service import validate_ticker_symbol
         validate_ticker_symbol(ticker)
+
+
+def test_index_accepts_a_zero_day_only_range():
+    captured = {}
+
+    def builder(request):
+        captured["request"] = request
+        return _build_result(request)
+
+    response = create_app(surface_builder=builder).test_client().get(
+        "/?ticker=spy&dte_min=0&dte_max=0"
+    )
+    assert response.status_code == 200
+    assert captured["request"].dte_min == captured["request"].dte_max == 0
+    assert b'data-min-gap="0"' in response.data
+    assert b'name="dte_min" type="number" min="0"' in response.data
+
+
+def test_empty_homepage_does_not_import_the_financial_stack():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys; import web_app; "
+        "assert web_app.app.test_client().get('/').status_code == 200; "
+        "assert not {'numpy', 'pandas', 'scipy', 'plotly', 'yfinance'} & set(sys.modules)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
