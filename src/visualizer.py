@@ -292,7 +292,7 @@ def _project_call_price_slice(
     return initial
 
 
-def _build_surface_nodes(
+def select_surface_quotes(
     df: pd.DataFrame,
     underlying_price: float,
     risk_free_rate: float,
@@ -406,6 +406,22 @@ def _build_surface_nodes(
     ].copy()
     if selected_df.empty:
         return pd.DataFrame()
+
+    return selected_df
+
+
+def _build_surface_nodes(
+    df: pd.DataFrame,
+    underlying_price: float,
+    risk_free_rate: float,
+    dividend_yield: float,
+) -> pd.DataFrame:
+    selected_df = select_surface_quotes(
+        df, underlying_price, risk_free_rate, dividend_yield
+    )
+    if selected_df.empty:
+        return pd.DataFrame()
+    group_keys = ["days_to_expiration", "strike"]
 
     selected_df["optionTypeLower"] = selected_df["optionType"].astype(str).str.lower()
     selected_df["weightedCallEquivalentPrice"] = (

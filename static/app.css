@@ -90,6 +90,12 @@ h1 {
   grid-area: ticker;
 }
 
+.ticker-note {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
 .control-form .range-control:first-of-type {
   grid-area: strike;
 }

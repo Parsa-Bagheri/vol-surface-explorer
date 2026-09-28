@@ -4,8 +4,7 @@ import os
 from typing import Any, Callable, Dict
 
 from flask import Flask, render_template, request
-
-from src.surface_service import SurfaceBuildResult, SurfaceRequest, build_surface_bundle
+from src.ticker_validation import validate_ticker_symbol as _validate_ticker_symbol
 
 
 DEFAULT_FORM_VALUES = {
@@ -39,6 +38,17 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
 }
+
+def _default_surface_builder(request: Any) -> Any:
+    from src.surface_service import build_surface_bundle
+
+    return build_surface_bundle(request)
+
+
+def _surface_request(**kwargs: Any) -> Any:
+    from src.surface_service import SurfaceRequest
+
+    return SurfaceRequest(**kwargs)
 
 
 def _parse_int_arg(
@@ -85,7 +95,7 @@ def _dte_range_label(min_value: Any, max_value: Any) -> str:
     return f"{min_value}-{max_value}"
 
 
-def _surface_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
+def _surface_metric_cards(result: Any) -> list[dict[str, str]]:
     diagnostics = result.diagnostics
     request_diagnostics = diagnostics.get("request", {})
     return [
@@ -107,33 +117,20 @@ def _surface_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
     ]
 
 
-def _advanced_metric_cards(result: SurfaceBuildResult) -> list[dict[str, str]]:
+def _advanced_metric_cards(result: Any) -> list[dict[str, str]]:
     diagnostics = result.diagnostics
-    internal_validation = diagnostics.get("internal_validation", {})
+    outcomes = diagnostics.get("contract_outcomes", {})
     return [
-        {"label": "Raw Contracts", "value": f"{len(result.raw_options_df):,}"},
+        {"label": "Contracts fetched", "value": f"{len(result.raw_options_df):,}"},
         {
-            "label": "Surface Quotes",
-            "value": f"{diagnostics.get('rows_surface_included', 0):,}",
-        },
-        {"label": "Retained Rows", "value": f"{diagnostics.get('rows_retained', 0):,}"},
-        {
-            "label": "Excluded Rows",
-            "value": f"{diagnostics.get('rows_surface_excluded', 0):,}",
-        },
-        {
-            "label": "Repricing MAE",
-            "value": (
-                f"{float(internal_validation.get('repricing_mae')):.4f}"
-                if internal_validation.get("repricing_mae") is not None
-                else "n/a"
-            ),
+            "label": "Contracts used",
+            "value": f"{outcomes.get('used', 0):,}",
         },
     ]
 
 
 def create_app(
-    surface_builder: Callable[[SurfaceRequest], SurfaceBuildResult] = build_surface_bundle,
+    surface_builder: Callable[[Any], Any] = _default_surface_builder,
 ) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 1024
@@ -143,7 +140,13 @@ def create_app(
         for header, value in SECURITY_HEADERS.items():
             response.headers.setdefault(header, value)
         if request.endpoint == "index":
-            response.headers["Cache-Control"] = "no-store"
+            if (request.args.get("ticker") or "").strip():
+                response.headers["Cache-Control"] = "no-store"
+            else:
+                response.headers["Cache-Control"] = "public, max-age=0"
+                response.headers["Vercel-CDN-Cache-Control"] = (
+                    "public, s-maxage=3600, stale-while-revalidate=86400"
+                )
         return response
 
     @app.route("/", methods=["GET"])
@@ -157,9 +160,10 @@ def create_app(
 
         if values["ticker"]:
             try:
+                ticker = _validate_ticker_symbol(str(values["ticker"]))
                 result = surface_builder(
-                    SurfaceRequest(
-                        ticker=str(values["ticker"]),
+                    _surface_request(
+                        ticker=ticker,
                         strike_min_pct=float(values["strike_min_pct"]) / 100.0,
                         strike_max_pct=float(values["strike_max_pct"]) / 100.0,
                         dte_min=int(values["dte_min"]),
@@ -193,6 +197,7 @@ def create_app(
             diagnostics=diagnostics,
             surface_cards=surface_cards,
             advanced_cards=advanced_cards,
+            outcomes=diagnostics.get("contract_outcomes", {}) if diagnostics else {},
             error_message=error_message,
         )
 

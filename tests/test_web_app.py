@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 import plotly.graph_objects as go
 
 from src.surface_service import SurfaceBuildResult, SurfaceRequest
@@ -20,6 +21,7 @@ def _build_result(request: SurfaceRequest) -> SurfaceBuildResult:
         "surface_dte_max": 68,
         "flag_counts": {"low_volume": 2},
         "internal_validation": {"repricing_mae": 0.1234},
+        "contract_outcomes": {"used": 8, "excluded": 4, "reasons": [{"label": "Insufficient liquidity", "count": 4}], "accepted_trade_count": 0},
     }
     return SurfaceBuildResult(
         request=request,
@@ -69,7 +71,11 @@ def test_index_builds_surface_from_query_params():
     assert b"Requested DTE" in response.data
     assert b"Available DTE" in response.data
     assert b"Advanced info" in response.data
-    assert b"Raw Contracts" in response.data
+    assert b"Contracts fetched" in response.data
+    assert b"Contracts used" in response.data
+    assert b"Repricing MAE" not in response.data
+    assert b"Quality Summary" not in response.data
+    assert b"Insufficient liquidity: 4" in response.data
     assert b"plot-loading-overlay" in response.data
     assert b"Building surface" in response.data
     assert b"Interactive Plot" not in response.data
@@ -181,3 +187,18 @@ def test_index_rejects_invalid_ticker_before_fetching():
 
     assert response.status_code == 200
     assert b"Ticker symbols may only contain" in response.data
+
+
+@pytest.mark.parametrize("ticker", ["VIX", "^VIX", "vix"])
+def test_vix_explains_unsupported_model_before_building(ticker):
+    def unexpected_builder(request):
+        pytest.fail("Unsupported VIX must not invoke the equity surface builder")
+
+    response = create_app(surface_builder=unexpected_builder).test_client().get(
+        "/", query_string={"ticker": ticker}
+    )
+    assert b"VIX options exist" in response.data
+    assert b"expiry-specific VIX forward prices" in response.data
+    with pytest.raises(ValueError, match="VIX options exist"):
+        from src.surface_service import validate_ticker_symbol
+        validate_ticker_symbol(ticker)

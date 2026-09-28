@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-import re
 from typing import Any, Dict
 
 import pandas as pd
@@ -15,9 +14,10 @@ from src.data_cleaner import (
 from src.data_fetch import get_current_price, get_options_data
 from src.time_utils import normalize_as_of_utc
 from src.visualizer import create_vol_surface
+from src.ticker_validation import validate_ticker_symbol
+from src.contract_outcomes import build_contract_outcomes
 
 
-TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,11}$")
 VALID_QUALITY_MODES = {"strict", "balanced", "lenient"}
 MIN_STRIKE_PCT = 0.50
 MAX_STRIKE_PCT = 1.50
@@ -50,18 +50,6 @@ class SurfaceBuildResult:
     cleaned_options_df: pd.DataFrame
     diagnostics: Dict[str, Any]
     figure: Any
-
-
-def validate_ticker_symbol(ticker: str) -> str:
-    normalized = (ticker or "").strip().upper()
-    if not normalized:
-        raise ValueError("A ticker symbol is required.")
-    if not TICKER_PATTERN.fullmatch(normalized):
-        raise ValueError(
-            "Ticker symbols may only contain letters, numbers, dots, and hyphens, "
-            "and must be 12 characters or fewer."
-        )
-    return normalized
 
 
 def _finite_float(name: str, value: float) -> float:
@@ -157,6 +145,8 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
             f"No options data was returned for {validated_request.ticker}."
         )
 
+    raw_options_df = raw_options_df.copy()
+    raw_options_df["contractId"] = range(len(raw_options_df))
     cleaned_options_df = prepare_options_data(
         raw_options_df,
         min_strike=min_strike_abs,
@@ -194,6 +184,9 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         "valuation_time_utc": valuation_time_utc.isoformat(),
     }
     diagnostics["fetch"] = raw_options_df.attrs.get("fetchDiagnostics", {})
+    diagnostics["contract_outcomes"] = build_contract_outcomes(
+        raw_options_df, cleaned_options_df, validated_request, current_price
+    )
     diagnostics["internal_validation"] = build_internal_validation_report(
         cleaned_options_df,
         underlying_price=current_price,

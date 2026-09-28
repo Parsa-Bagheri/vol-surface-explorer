@@ -927,6 +927,9 @@ def prepare_options_data(
         "surfaceWeight",
     ]
 
+    if "contractId" in clean_df.columns:
+        output_columns.append("contractId")
+
     for column in output_columns:
         if column not in clean_df.columns:
             clean_df[column] = np.nan

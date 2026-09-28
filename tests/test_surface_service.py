@@ -12,6 +12,7 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
         [
             {
                 "strike": 100.0,
+                "contractId": 0,
                 "days_to_expiration": 12,
                 "time_to_expiration_years": 12 / 365.25,
                 "impliedVolatilityFinal": 0.22,

@@ -16,7 +16,8 @@
     <form method="get" action="/" class="control-form">
       <label class="field-group ticker-field">
         <span>Ticker</span>
-        <input type="text" name="ticker" value="{{ values.ticker }}" placeholder="SPY" maxlength="12" autocomplete="off">
+        <input type="text" name="ticker" value="{{ values.ticker }}" placeholder="SPY" maxlength="12" autocomplete="off" aria-describedby="ticker-note">
+        <small id="ticker-note" class="ticker-note">Include .TO for TSX stocks.</small>
       </label>
 
       <section class="field-group range-control" data-range-control data-min-gap="1">
@@ -118,7 +119,7 @@
         <details class="advanced-panel">
           <summary>
             <span>Advanced info</span>
-            <small>rows and quality flags</small>
+            <small>contract selection</small>
           </summary>
 
           <div class="advanced-content">
@@ -135,22 +136,18 @@
 
             <section class="diagnostics-grid">
               <article class="diagnostics-panel">
-                <h2>Quality Summary</h2>
+                <h2>Why Contracts Were Excluded</h2>
+                <p>{{ outcomes.excluded }} contracts excluded. Each contract is counted once.</p>
                 <ul>
-                  <li>Retained rows: {{ diagnostics.rows_retained }}</li>
-                  <li>Surface rows: {{ diagnostics.rows_surface_included }}</li>
-                  <li>Excluded rows: {{ diagnostics.rows_surface_excluded }}</li>
-                </ul>
-              </article>
-              <article class="diagnostics-panel">
-                <h2>Flag Counts</h2>
-                <ul>
-                  {% for flag, count in diagnostics.flag_counts|dictsort %}
-                    <li>{{ flag }}: {{ count }}</li>
+                  {% for issue in outcomes.reasons %}
+                    <li>{{ issue.label }}: {{ issue.count }}</li>
                   {% else %}
-                    <li>No flags recorded.</li>
+                    <li>No contracts excluded.</li>
                   {% endfor %}
                 </ul>
+                {% if outcomes.accepted_trade_count %}
+                  <p>{{ outcomes.accepted_trade_count }} accepted contracts use recent trades because two-sided quotes were unavailable.</p>
+                {% endif %}
               </article>
             </section>
           </div>

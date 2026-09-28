@@ -1,7 +1,10 @@
 .git
 .pytest_cache
+.tmp_pytest
+.tmp.driveupload
 .ruff_cache
 .vscode
+.cache
 __pycache__
 **/__pycache__
 **/*.pyc
