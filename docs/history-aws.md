@@ -1,6 +1,8 @@
 # Optional S3 archive and Athena preparation
 
-Status: prepared locally, not deployed. No AWS account was created, no S3 request or Athena query was executed, and no cloud cost was incurred. Tests use an in-memory fake S3 client. Reuse an existing approved account setup if one is available.
+Status: the isolated synthetic demo was deployed and verified on October 13, 2026. See [actual AWS results](history-aws-verification.md) and the [deployment runbook](history-aws-runbook.md). Unit tests use an in-memory fake S3 client; cloud evidence is reported separately.
+
+An execution-ready, bounded two-observation deployment is now provided in [the AWS runbook](history-aws-runbook.md). It uses an existing CLI login, creates an isolated S3/Athena/Glue stack in us-east-2, verifies actual archive readback and coverage SQL, and includes explicit teardown. Preparation and fake-client tests remain distinct from a cloud run; this status must be updated only after recorded execution.
 
 The free working implementation is local storage plus DuckDB. The optional archive uses the same verified export contract. `S3ObservationArchive` accepts an explicitly supplied client so importing or using local history does not load credentials or make AWS calls. Files are written under content-addressed object keys with conditional `IfNoneMatch='*'` writes; `commit.json` is written last. Repeated uploads compare existing bytes before reusing them. Downloads verify the bundle, file checksums and lake manifests in a staging directory before publication.
 

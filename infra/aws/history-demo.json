@@ -1,0 +1,92 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Isolated synthetic volatility history: immutable S3 archive and bounded on-demand Athena coverage verification.",
+  "Parameters": {
+    "DatabaseName": {"Type": "String", "AllowedPattern": "[a-z][a-z0-9_]{0,63}", "Default": "vol_history_demo"}
+  },
+  "Resources": {
+    "ObservationArchive": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {"BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": true, "RestrictPublicBuckets": true},
+        "BucketEncryption": {"ServerSideEncryptionConfiguration": [{"ServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]},
+        "LifecycleConfiguration": {"Rules": [
+          {"Id": "ArchiveRetention", "Status": "Enabled", "Prefix": "archive/", "ExpirationInDays": 30, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}},
+          {"Id": "ProjectionRetention", "Status": "Enabled", "Prefix": "analytics/", "ExpirationInDays": 7},
+          {"Id": "QueryResultRetention", "Status": "Enabled", "Prefix": "results/", "ExpirationInDays": 1}
+        ]},
+        "Tags": [{"Key": "Project", "Value": "vol-surface-explorer"}, {"Key": "Purpose", "Value": "synthetic-history-verification"}]
+      }
+    },
+    "ArchivePolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {"Ref": "ObservationArchive"},
+        "PolicyDocument": {"Version": "2012-10-17", "Statement": [{
+          "Effect": "Deny", "Principal": "*", "Action": "s3:*",
+          "Resource": [{"Fn::GetAtt": ["ObservationArchive", "Arn"]}, {"Fn::Sub": "${ObservationArchive.Arn}/*"}],
+          "Condition": {"Bool": {"aws:SecureTransport": "false"}}
+        }]}
+      }
+    },
+    "HistoryWorkGroup": {
+      "Type": "AWS::Athena::WorkGroup",
+      "Properties": {
+        "Name": {"Fn::Sub": "${AWS::StackName}-queries"},
+        "Description": "Synthetic coverage verification only; on-demand SQL with enforced 10 MB query scan cutoff.",
+        "State": "ENABLED", "RecursiveDeleteOption": true,
+        "Tags": [{"Key": "Project", "Value": "vol-surface-explorer"}, {"Key": "Purpose", "Value": "synthetic-history-verification"}],
+        "WorkGroupConfiguration": {
+          "BytesScannedCutoffPerQuery": 10000000,
+          "EnforceWorkGroupConfiguration": true,
+          "PublishCloudWatchMetricsEnabled": false,
+          "RequesterPaysEnabled": false,
+          "ResultConfiguration": {
+            "OutputLocation": {"Fn::Sub": "s3://${ObservationArchive}/results/"},
+            "ExpectedBucketOwner": {"Ref": "AWS::AccountId"},
+            "EncryptionConfiguration": {"EncryptionOption": "SSE_S3"}
+          }
+        }
+      }
+    },
+    "CoverageDatabase": {
+      "Type": "AWS::Glue::Database",
+      "Properties": {"CatalogId": {"Ref": "AWS::AccountId"}, "DatabaseInput": {"Name": {"Ref": "DatabaseName"}, "Description": "Synthetic volatility coverage demo; no crawler or ETL compute."}}
+    },
+    "CoverageTable": {
+      "Type": "AWS::Glue::Table", "DependsOn": "CoverageDatabase",
+      "Properties": {
+        "CatalogId": {"Ref": "AWS::AccountId"}, "DatabaseName": {"Ref": "DatabaseName"},
+        "TableInput": {
+          "Name": "volatility_coverage", "TableType": "EXTERNAL_TABLE",
+          "Parameters": {"classification": "parquet"},
+          "PartitionKeys": [{"Name": "observation_date", "Type": "string"}, {"Name": "ticker", "Type": "string"}],
+          "StorageDescriptor": {
+            "Location": {"Fn::Sub": "s3://${ObservationArchive}/analytics/"},
+            "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
+            "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
+            "SerdeInfo": {"SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"},
+            "Columns": [
+              {"Name": "snapshot_id", "Type": "string"}, {"Name": "processing_id", "Type": "string"},
+              {"Name": "schema_version", "Type": "bigint"}, {"Name": "valuation_time_utc", "Type": "timestamp"},
+              {"Name": "source_kind", "Type": "string"}, {"Name": "partial", "Type": "boolean"},
+              {"Name": "expected_expirations", "Type": "bigint"}, {"Name": "received_expirations", "Type": "bigint"},
+              {"Name": "raw_rows", "Type": "bigint"}, {"Name": "cleaned_rows", "Type": "bigint"},
+              {"Name": "used_rows", "Type": "bigint"}, {"Name": "excluded_rows", "Type": "bigint"},
+              {"Name": "malformed_rows", "Type": "bigint"}, {"Name": "duplicate_rows", "Type": "bigint"}
+            ]
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ArchiveBucket": {"Value": {"Ref": "ObservationArchive"}},
+    "WorkGroup": {"Value": {"Ref": "HistoryWorkGroup"}},
+    "DatabaseName": {"Value": {"Ref": "DatabaseName"}},
+    "TableName": {"Value": "volatility_coverage"},
+    "ResultPrefix": {"Value": "results/"}
+  }
+}
