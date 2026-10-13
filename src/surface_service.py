@@ -124,6 +124,25 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
         max_dte=validated_request.dte_max,
         as_of_utc=valuation_time_utc,
     )
+    return process_surface_inputs(
+        validated_request, raw_options_df, current_price, valuation_time_utc
+    )
+
+
+def process_surface_inputs(
+    request: SurfaceRequest,
+    raw_options_df: pd.DataFrame,
+    current_price: float,
+    valuation_time_utc: pd.Timestamp,
+) -> SurfaceBuildResult:
+    """Build from explicit inputs; this path never fetches prices or option chains."""
+    validated_request = _validated_request(request)
+    valuation_time_utc = normalize_as_of_utc(valuation_time_utc)
+    current_price = _finite_float("spot", current_price)
+    if current_price <= 0:
+        raise ValueError("spot must be positive.")
+    min_strike_abs = current_price * validated_request.strike_min_pct
+    max_strike_abs = current_price * validated_request.strike_max_pct
     if raw_options_df.empty:
         raise ValueError(
             f"No options data was returned for {validated_request.ticker}."
@@ -131,8 +150,11 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
 
     raw_options_df = raw_options_df.copy()
     raw_options_df["contractId"] = range(len(raw_options_df))
+    cleaning_input = raw_options_df.copy()
+    if "historyInvalidReason" in cleaning_input:
+        cleaning_input.loc[cleaning_input["historyInvalidReason"].ne(""), "strike"] = float("nan")
     cleaned_options_df = prepare_options_data(
-        raw_options_df,
+        cleaning_input,
         min_strike=min_strike_abs,
         max_strike=max_strike_abs,
         option_type_to_plot="both",

@@ -1,0 +1,89 @@
+{
+  "workload": "Two synthetic BSM quote fixtures; four requested expirations; B has one simulated failed expiration.",
+  "environment": {
+    "python": "3.12.14",
+    "os": "Windows-11-10.0.22631-SP0",
+    "machine": "AMD64",
+    "dependencies": {
+      "numpy": "2.5.4",
+      "pandas": "2.3.3",
+      "scipy": "1.18.1",
+      "plotly": "6.9.0",
+      "pyarrow": "26.0.0",
+      "duckdb": "1.5.6"
+    }
+  },
+  "processor": {
+    "version": "history-v1",
+    "code_sha256": "39c3db92f021344386a21d9942b1aed0c46c72d439bda44eb1f91459a5f84c1e",
+    "dependencies": {
+      "numpy": "2.5.4",
+      "pandas": "2.3.3",
+      "scipy": "1.18.1",
+      "plotly": "6.9.0",
+      "pyarrow": "26.0.0"
+    }
+  },
+  "seed_and_first_processing_seconds": 3.497774699999354,
+  "offline_replay_seconds": [
+    1.6933456000006117,
+    1.4952639000002819,
+    1.579871899999489
+  ],
+  "offline_replay_median_seconds": 1.579871899999489,
+  "idempotent_process_seconds": [
+    0.05353100000138511,
+    0.05103480000070704,
+    0.05723699999907694
+  ],
+  "query_seconds": [
+    0.16144789999998466,
+    0.11721679999936896,
+    0.12696449999930337
+  ],
+  "query_median_seconds": 0.12696449999930337,
+  "coverage": [
+    {
+      "snapshot_id": "synthetic-a",
+      "partial": false,
+      "raw_rows": 88,
+      "used_rows": 47,
+      "excluded_rows": 41
+    },
+    {
+      "snapshot_id": "synthetic-b",
+      "partial": true,
+      "raw_rows": 66,
+      "used_rows": 32,
+      "excluded_rows": 34
+    }
+  ],
+  "comparison_seconds": 0.18188670000017737,
+  "comparison": {
+    "supported_points": 1088,
+    "unsupported_points": 64,
+    "domain": {
+      "strike_min": 96.28920575274043,
+      "strike_max": 105.83299559317473,
+      "dte_min": 4.0,
+      "dte_max": 24.0
+    },
+    "mean_change_vol_points": 3.438792683151946
+  },
+  "parquet_bytes": 189204,
+  "parquet_files": {
+    "observations\\date=2026-10-12\\ticker=DEMO\\synthetic-a\\observation.parquet": 8394,
+    "observations\\date=2026-10-12\\ticker=DEMO\\synthetic-a\\raw.parquet": 22566,
+    "observations\\date=2026-10-13\\ticker=DEMO\\synthetic-b\\observation.parquet": 8394,
+    "observations\\date=2026-10-13\\ticker=DEMO\\synthetic-b\\raw.parquet": 20297,
+    "processed\\synthetic-a\\7f9e17b1143606afe8966bf0\\cleaned.parquet": 29584,
+    "processed\\synthetic-a\\7f9e17b1143606afe8966bf0\\coverage.parquet": 9628,
+    "processed\\synthetic-a\\7f9e17b1143606afe8966bf0\\selected.parquet": 28303,
+    "processed\\synthetic-b\\2cf34992aa0032cf1f77abb9\\cleaned.parquet": 26282,
+    "processed\\synthetic-b\\2cf34992aa0032cf1f77abb9\\coverage.parquet": 9628,
+    "processed\\synthetic-b\\2cf34992aa0032cf1f77abb9\\selected.parquet": 26128
+  },
+  "market_collection": "Not executed; fixture ingestion only",
+  "aws": "Prepared only; not deployed or queried",
+  "limitations": "Warm local synthetic workload; no Yahoo latency, browser rendering, independent accuracy benchmark or production load."
+}

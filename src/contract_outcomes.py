@@ -69,6 +69,9 @@ def build_contract_outcomes(raw, cleaned, request, spot, selected_quotes=None):
         np.where(missing_fields, "Missing contract fields", "Outside selected range"),
         index=outside.index,
     )
+    if "historyInvalidReason" in outside:
+        invalid = outside["historyInvalidReason"].fillna("").ne("")
+        outside_reasons.loc[invalid] = outside.loc[invalid, "historyInvalidReason"]
     excluded = cleaned.loc[~cleaned["contractId"].isin(used_ids)]
     excluded_reasons = _exclusion_reasons(excluded)
     alternative = excluded["includeInSurface"].fillna(False).astype(bool)

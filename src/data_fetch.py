@@ -121,6 +121,33 @@ def get_current_price(ticker_symbol: str) -> Optional[float]:
     return float(current_price)
 
 
+def get_price_observation(ticker_symbol: str) -> Dict[str, object]:
+    """Capture the selected fallback and its timestamp, without claiming real-time spot."""
+    stock = yf.Ticker(ticker_symbol)
+    collected = pd.Timestamp.now(tz="UTC").isoformat()
+    for period in ("1d", "5d", "1mo"):
+        try:
+            history = stock.history(period=period)
+            if history is None or history.empty or "Close" not in history:
+                continue
+            closes = pd.to_numeric(history["Close"], errors="coerce")
+            closes = closes[closes.notna() & (closes > 0)]
+            if not closes.empty:
+                timestamp = pd.Timestamp(closes.index[-1])
+                return {"value": float(closes.iloc[-1]), "provider": "yfinance",
+                        "method": f"history:{period}:Close", "collected_at_utc": collected,
+                        "source_timestamp_utc": normalize_as_of_utc(timestamp).isoformat()}
+        except Exception:
+            continue
+    for method, fetch in (("fast_info:fallback", _price_from_fast_info),
+                          ("info:fallback", _price_from_info)):
+        price = fetch(stock)
+        if price is not None:
+            return {"value": price, "provider": "yfinance", "method": method,
+                    "collected_at_utc": collected, "source_timestamp_utc": None}
+    raise ValueError(f"Could not determine a spot observation for {ticker_symbol}.")
+
+
 def _compute_chain_health(
     chain_df: pd.DataFrame,
     poor_quality_zero_quote_ratio: float,
@@ -232,6 +259,7 @@ def get_options_data(
     stock = yf.Ticker(ticker_symbol)
     options_data_list = []
     fetch_diagnostics = []
+    fetch_failures = {}
     available_dates = stock.options # Get all available expiration dates
 
     if not available_dates:
@@ -299,6 +327,8 @@ def get_options_data(
                     retry_wait_seconds=retry_wait_seconds,
                 )
             except Exception as error:
+                fetch_failures[date] = {"expiration": date, "status": "failed", "error": str(error),
+                                        "collected_at_utc": pd.Timestamp.now(tz="UTC").isoformat()}
                 print(f"Could not fetch options for {ticker_symbol} on {date}: {error}")
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -319,6 +349,8 @@ def get_options_data(
                 try:
                     fetched_by_date[date] = future.result()
                 except Exception as error:
+                    fetch_failures[date] = {"expiration": date, "status": "failed", "error": str(error),
+                                            "collected_at_utc": pd.Timestamp.now(tz="UTC").isoformat()}
                     print(f"Could not fetch options for {ticker_symbol} on {date}: {error}")
 
     for date in selected_dates:
@@ -369,20 +401,19 @@ def get_options_data(
 
             fetch_diagnostics.append(chosen_health)
         except Exception as error:
+            fetch_failures[date] = {"expiration": date, "status": "failed", "error": str(error),
+                                    "collected_at_utc": pd.Timestamp.now(tz="UTC").isoformat()}
             print(f"Could not prepare options for {ticker_symbol} on {date}: {error}")
             continue # Skip to next date if an error occurs
 
-    if not options_data_list:
-        print(f"No options data could be compiled for {ticker_symbol}.")
-        return pd.DataFrame()
-
-    combined_options_df = pd.concat(options_data_list, ignore_index=True)
+    combined_options_df = (pd.concat(options_data_list, ignore_index=True)
+                           if options_data_list else pd.DataFrame())
     
-    if fetch_diagnostics:
+    if selected_dates:
         poor_quality_count = sum(
             1 for item in fetch_diagnostics if item.get("poor_quality")
         )
-        max_attempt_used = max(item.get("attempt", 1) for item in fetch_diagnostics)
+        max_attempt_used = max((item.get("attempt", 1) for item in fetch_diagnostics), default=0)
         combined_options_df.attrs["fetchDiagnostics"] = {
             "ticker": ticker_symbol,
             "expirations_available": len(available_dates),
@@ -400,6 +431,14 @@ def get_options_data(
                 for date in selected_dates
             ],
             "details": fetch_diagnostics,
+            "outcomes": [
+                fetch_failures.get(date) or {
+                    "expiration": date,
+                    "status": "received" if any(item["expiration"] == date and item.get("contracts", 0) > 0 for item in fetch_diagnostics) else "empty",
+                    "collected_at_utc": next((item["snapshot_timestamp_utc"] for item in fetch_diagnostics if item["expiration"] == date), None),
+                }
+                for date in selected_dates
+            ],
         }
 
     print(f"Successfully fetched {len(combined_options_df)} total option contracts for {ticker_symbol}.")

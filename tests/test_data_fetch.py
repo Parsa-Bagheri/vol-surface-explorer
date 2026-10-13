@@ -144,3 +144,38 @@ def test_zero_day_fetch_only_includes_unexpired_chains(monkeypatch, as_of, expec
         assert result["expirationDteAtFetch"].unique().tolist() == [0]
     else:
         assert result.empty
+
+
+@pytest.mark.parametrize("all_fail", [False, True])
+def test_expiration_failures_preserve_partial_and_total_failure_metadata(monkeypatch, all_fail):
+    class FakeTicker:
+        options = ("2026-10-16", "2026-10-23")
+
+        def option_chain(self, expiration):
+            if all_fail or expiration == "2026-10-23":
+                raise RuntimeError("Simulated expiration request failure")
+            return _fake_chain(expiration)
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", lambda ticker: FakeTicker())
+    result = data_fetch.get_options_data("XLY", retry_on_poor_quality=False,
+                                         as_of_utc=pd.Timestamp("2026-10-13T18:00:00Z"))
+    fetch = result.attrs["fetchDiagnostics"]
+    assert fetch["expirations_requested"] == 2
+    assert fetch["expirations_fetched"] == (0 if all_fail else 1)
+    assert fetch["outcomes"][-1]["status"] == "failed"
+    assert "Simulated" in fetch["outcomes"][-1]["error"]
+    assert result.empty == all_fail
+
+
+def test_price_observation_records_history_fallback_and_source_time(monkeypatch):
+    class FakeTicker:
+        def history(self, period):
+            if period == "1d":
+                return pd.DataFrame()
+            return pd.DataFrame({"Close": [101.25]}, index=pd.DatetimeIndex(["2026-10-12T20:00:00Z"]))
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", lambda ticker: FakeTicker())
+    result = data_fetch.get_price_observation("XLY")
+    assert result["value"] == 101.25
+    assert result["method"] == "history:5d:Close"
+    assert result["source_timestamp_utc"] == "2026-10-12T20:00:00+00:00"

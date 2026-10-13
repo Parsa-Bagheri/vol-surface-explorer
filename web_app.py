@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 from typing import Any, Callable, Dict
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_file
 from src.ticker_validation import validate_ticker_symbol as _validate_ticker_symbol
 from src.surface_config import (
     DEFAULT_WEB_DTE_MIN, MAX_DTE, MAX_STRIKE_PCT, MIN_DTE, MIN_STRIKE_PCT, SurfaceRequest,
@@ -136,9 +136,11 @@ def _advanced_metric_cards(result: Any) -> list[dict[str, str]]:
 
 def create_app(
     surface_builder: Callable[[Any], Any] = _default_surface_builder,
+    history_root: str | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 1024
+    app.config["HISTORY_ROOT"] = history_root or os.environ.get("VOL_HISTORY_ROOT", "data/history")
     asset_versions = {
         name: hashlib.sha256((Path(app.static_folder) / name).read_bytes()).hexdigest()[:12]
         for name in ("app.css", "app.js")
@@ -156,6 +158,8 @@ def create_app(
                 response.headers["Vercel-CDN-Cache-Control"] = (
                     "public, s-maxage=3600, stale-while-revalidate=86400"
                 )
+        elif request.endpoint in {"history", "history_file"}:
+            response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.route("/", methods=["GET"])
@@ -212,6 +216,73 @@ def create_app(
             outcomes=diagnostics.get("contract_outcomes", {}) if diagnostics else {},
             error_message=error_message,
         )
+
+    @app.get("/history")
+    def history():
+        # Keep the live landing page's deferred financial imports intact.
+        choices, invalid, selected, plots, comparison = [], [], [], [], None
+        error = None
+        left_id, right_id = request.args.get("left", ""), request.args.get("right", "")
+        try:
+            from src.history_store import LocalObservationStore, ObservationError
+            from src.history_compare import compare_observations, saved_figure
+            store = LocalObservationStore(app.config["HISTORY_ROOT"])
+            observations, invalid = store.list()
+            for observation in observations:
+                artifacts = []
+                for path in sorted((store.root / "processed" / observation["snapshot_id"]).glob("*")):
+                    if path.is_dir() and not path.name.startswith("."):
+                        try:
+                            artifacts.append(store.load_artifact(observation["snapshot_id"], path.name))
+                        except ObservationError as exc:
+                            invalid.append({"snapshot_id": observation["snapshot_id"], "error": str(exc)})
+                choices.append({"observation": observation, "artifacts": artifacts})
+            for side, snapshot_id in (("left", left_id), ("right", right_id)):
+                if not snapshot_id:
+                    continue
+                entry = next((item for item in choices if item["observation"]["snapshot_id"] == snapshot_id), None)
+                if entry is None:
+                    raise ObservationError("Requested observation is unavailable or invalid.")
+                processing_id = request.args.get(f"{side}_processing", "")
+                if not processing_id:
+                    if len(entry["artifacts"]) != 1:
+                        raise ObservationError("Select a saved processing version for this observation.")
+                    processing_id = entry["artifacts"][0]["processing_id"]
+                artifact = store.load_artifact(snapshot_id, processing_id)
+                selected.append({"observation": entry["observation"], "artifact": artifact, "side": side})
+                plots.append(saved_figure(store, snapshot_id, processing_id).to_html(full_html=False,
+                             include_plotlyjs="cdn" if not plots else False,
+                             config={"responsive": True, "displaylogo": False}, default_height="480px"))
+            if len(selected) == 2:
+                comparison = compare_observations(store, left_id, right_id,
+                             selected[0]["artifact"]["processing_id"], selected[1]["artifact"]["processing_id"])
+                comparison["plot_html"] = comparison["figure"].to_html(full_html=False, include_plotlyjs=False,
+                              config={"responsive": True, "displaylogo": False}, default_height="440px")
+        except ImportError:
+            error = "History requires the optional local dependencies in requirements-history.txt."
+        except ValueError as exc:
+            error = str(exc)
+        return render_template("history.html", choices=choices, invalid=invalid, selected=selected, plots=plots,
+                               comparison=comparison, error_message=error, left_id=left_id, right_id=right_id,
+                               asset_versions=asset_versions)
+
+    @app.get("/history/<snapshot_id>/files/<name>")
+    def history_file(snapshot_id, name):
+        from src.history_store import LocalObservationStore
+        store = LocalObservationStore(app.config["HISTORY_ROOT"])
+        try:
+            store.load(snapshot_id)
+            if name in {"raw.parquet", "observation.parquet", "manifest.json"}:
+                path = store.observation_path(snapshot_id) / name
+            elif name in {"cleaned.parquet", "selected.parquet", "coverage.parquet", "diagnostics.json", "surface.json", "processing-manifest.json"}:
+                processing_id = request.args.get("processing", "")
+                store.load_artifact(snapshot_id, processing_id)
+                path = store.artifact_path(snapshot_id, processing_id) / ("manifest.json" if name == "processing-manifest.json" else name)
+            else:
+                return "Unknown saved artifact", 404
+            return send_file(path, as_attachment=True, download_name=f"{snapshot_id}-{name}")
+        except ValueError as exc:
+            return str(exc), 404
 
     return app
 

@@ -19,6 +19,13 @@ Captured directly from the [live production site](https://www.volexplorer.ca/?ti
 - Contracts fetched and contracts actually used, with exactly one exclusion reason per excluded contract.
 - Lightweight Flask homepage with deferred financial-library imports, Vercel edge caching, and versioned static assets.
 - A retained CLI for HTML exports, detailed diagnostics, and optional external IV benchmarks.
+- Immutable saved observations, network-free replay with original clock/spot, DuckDB SQL over Parquet, and historical comparison with visible partial coverage.
+
+## Saved observations
+
+The optional local history workflow preserves raw inputs, collection outcomes, original spot/valuation time and processing lineage. Install `requirements-history.txt`, then run `python history.py --store demo-output/my-lake demo` and open `/history` with `VOL_HISTORY_ROOT=demo-output/my-lake`. The demo supplies two explicitly synthetic observations, including a simulated failed expiration; real saved history starts with your future collections.
+
+See [setup, collection, replay, SQL, schema and recovery](docs/history.md), [five-minute demo](docs/history-demo.md), [measured evidence](docs/history-evidence.md), and [unexecuted S3/Athena preparation](docs/history-aws.md). Collection/scheduling runs on a persistent host, separate from the ephemeral Vercel web deployment.
 
 ## Methodology
 
