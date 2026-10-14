@@ -31,7 +31,7 @@ The protected [verified preview](https://vol-surf-explorer-345z9l18y-parsa-baghe
 
 The READY staged production build is `dpl_7fGQkPFgEsSpZCSm2NLLmSnbVhaj`, source `4bfbfcfb7d6c99538948114ed05c4a69e95d2c97`, at `vol-surf-explorer-eqwwjoftz-parsa-bagheris-projects.vercel.app`. It independently passed **24 bounded endpoint checks**, including a fresh live SPY surface and all 18 byte-matching downloads. Production and preview use `VERCEL_SUPPORT_LARGE_FUNCTIONS=1`; the account remains on Hobby. A second replay of both downloaded AWS exports passed with network/provider/current-clock access blocked. The post-run AWS account metadata still reported Free/Active with $120 credits; billing can lag and that is not proof of zero charges.
 
-[PR #4](https://github.com/Parsa-Bagheri/vol-surface-explorer/pull/4) was merged under the user's approval: merge commit `06415be130dd9a01f1bbe884bb2d57f74b0ddd25` (PR head `b5cd54e117f6cbe3a5b6944aa21db4836ce71c89`). The exact tested staged build above was promoted to the existing public domain. Its application source is `4bfbfcf`; later commits contain release documentation only and do not change the deployed app.
+[PR #4](https://github.com/Parsa-Bagheri/vol-surface-explorer/pull/4) was merged under the user's approval: merge commit `06415be130dd9a01f1bbe884bb2d57f74b0ddd25` (PR head `b5cd54e117f6cbe3a5b6944aa21db4836ce71c89`). The exact tested staged build above was promoted to the existing public domain. Its application source was `4bfbfcf`; the final October 13 documentation commit `7738888` did not change that application.
 
 Anonymous checks against `https://www.volexplorer.ca` passed **24 checks**, including the catalog, each selected version, comparison, all **18 byte-matching downloads**, and one real live SPY surface. The browser rendered all three figures with no console warnings/errors. The bounded 15-minute post-release runtime-error query returned no error records. [Full public screenshot](images/real-history-public.png) and [comparison screenshot](images/real-history-comparison.png). Preview and the newly created production deployment independently retained the same committed bundle, including the original provenance and byte-identical downloads. Temporary instance storage is not the durable source.
 
@@ -45,3 +45,7 @@ Release identifiers/status:
 - Public `/history`/live checks and production promotion/PR merge: passed/completed under explicit approval.
 
 Detailed account/resource identifiers and raw cloud outputs remain in ignored private evidence rather than this public note.
+
+## October 14 homepage link update
+
+At the user's request, the homepage history link moved from beside the title to the bottom footer and now reads exactly “click here to see saved surfaces.” Source commit `0f9fcaaeb8f0d0ca40c13369c49063351f5b7914` was deployed as `dpl_3vw7ZyUEd7GCVqaA1ZMz3DDen2Wh` and promoted after staged verification. All 13 existing web tests passed. The public browser confirmed the footer position and successful navigation to the saved observations. [Homepage screenshot](images/saved-surfaces-footer.png).
