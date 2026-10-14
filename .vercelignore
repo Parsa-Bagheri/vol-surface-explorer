@@ -12,3 +12,11 @@ __pycache__
 tests
 docs
 environment.yml
+.venv
+data
+demo-output
+.playwright-cli
+output
+scripts
+infra
+.env*

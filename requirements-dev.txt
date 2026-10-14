@@ -1,0 +1,2 @@
+-r requirements-history.txt
+pytest>=8,<10

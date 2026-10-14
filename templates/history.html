@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Saved observations | Volatility Surface Explorer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=asset_versions['app.css']) }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='history.css', v=asset_versions['history.css']) }}">
+</head>
+<body><div class="app-shell history-shell">
+  <header class="app-header"><div><a href="/">Volatility Surface Explorer</a><h1>Saved observations</h1></div><span class="history-tag">Reproducible history</span></header>
+  <p class="history-intro">Explore surfaces using each observation's original valuation time and spot. Select one observation to inspect it, or two to compare compatible saved settings.</p>
+  <form class="history-controls" method="get">
+    {% for side, title, active in [('left', 'Observation A', left_id), ('right', 'Observation B', right_id)] %}
+    <label>{{ title }}<select name="{{ side }}"><option value="">Choose an observation</option>
+    {% for item in choices %}<option value="{{ item.observation.snapshot_id }}" {% if item.observation.snapshot_id == active %}selected{% endif %}>{{ item.observation.ticker }} · {{ item.observation.valuation_time_utc }} · {{ 'SYNTHETIC' if item.observation.source_kind == 'synthetic_fixture' else item.observation.source_kind }}{{ ' · PARTIAL' if item.observation.partial else '' }}</option>{% endfor %}</select></label>
+    <label>{{ title }} processing version<select name="{{ side }}_processing"><option value="">Use the single saved version</option>{% for item in choices %}{% for artifact in item.artifacts %}<option value="{{ artifact.processing_id }}" {% if request.args.get(side ~ '_processing') == artifact.processing_id %}selected{% endif %}>{{ item.observation.snapshot_id }} · {{ artifact.processor.code_sha256[:10] }} · {{ artifact.processing_id[:8] }}</option>{% endfor %}{% endfor %}</select></label>
+    {% endfor %}
+    <button class="primary-button" type="submit">View observations</button>
+  </form>
+  {% if error_message %}<section class="message-card error-card" role="alert"><h2>Observation unavailable</h2><p>{{ error_message }}</p></section>{% endif %}
+  {% if not choices and not error_message %}<section class="message-card"><h2>No observations saved yet</h2><p>Run a collection on a persistent local host, then process the observation. The demo command creates two clearly labeled synthetic fixtures.</p></section>{% endif %}
+  {% if invalid %}<section class="message-card error-card"><h2>Integrity issues</h2><p>These observations or processing versions were excluded because their saved data failed validation.</p><ul>{% for item in invalid %}<li>{{ item.snapshot_id }}: {{ item.error }}</li>{% endfor %}</ul></section>{% endif %}
+  <main>
+  {% for item in selected %}{% set obs = item.observation %}{% set art = item.artifact %}
+    <section class="history-observation surface-card">
+      <div class="history-title"><h2>Observation {{ 'A' if item.side == 'left' else 'B' }} · {{ obs.ticker }}</h2><span class="history-tag {{ 'history-warning' if obs.partial else '' }}">{{ 'PARTIAL' if obs.partial else 'Complete requested coverage' }}</span></div>
+      {% if obs.source_kind == 'synthetic_fixture' %}<p class="fixture-notice">Synthetic fixture — generated model quotes, not collected or backfilled market history.</p>{% endif %}
+      <p>{{ obs.label }}</p>
+      <dl class="history-facts"><div><dt>Valuation (UTC)</dt><dd>{{ obs.valuation_time_utc }}</dd></div><div><dt>Original spot</dt><dd>${{ '%.2f'|format(obs.spot.value) }}</dd></div><div><dt>Expiration coverage</dt><dd>{{ obs.received_expirations|length }}/{{ obs.expected_expirations|length }}</dd></div><div><dt>Contracts fetched / used / excluded</dt><dd>{{ art.contract_outcomes.fetched }} / {{ art.contract_outcomes.used }} / {{ art.contract_outcomes.excluded }}</dd></div></dl>
+      <p class="history-muted">Spot source: {{ obs.spot.provider }} · {{ obs.spot.method }} · source time {{ obs.spot.source_timestamp_utc or 'unavailable' }}. Collection time {{ obs.spot.collected_at_utc }}.</p>
+      {% if obs.partial %}<p class="history-warning">Missing expirations: {{ obs.missing_expirations|join(', ') or 'none' }}. Failed or empty outcomes: {{ obs.failed_expirations|join(', ') or 'none' }}.</p>{% endif %}
+      <p class="history-muted">Processing {{ art.processing_id }} · code {{ art.processor.code_sha256[:12] }} · {{ 'matches collection pipeline' if art.reproduction else 'reprocessed with different code/dependencies' }}.</p>
+      <div class="history-links"><a href="{{ url_for('history_file', snapshot_id=obs.snapshot_id, name='raw.parquet') }}">Raw Parquet</a><a href="{{ url_for('history_file', snapshot_id=obs.snapshot_id, name='manifest.json') }}">Observation manifest</a><a href="{{ url_for('history_file', snapshot_id=obs.snapshot_id, name='processing-manifest.json', processing=art.processing_id) }}">Processing manifest</a><a href="{{ url_for('history_file', snapshot_id=obs.snapshot_id, name='diagnostics.json', processing=art.processing_id) }}">Diagnostics</a><a href="{{ url_for('history_file', snapshot_id=obs.snapshot_id, name='cleaned.parquet', processing=art.processing_id) }}">Cleaned Parquet</a></div>
+      <div class="history-plot">{{ plots[loop.index0]|safe }}</div>
+      <details><summary>Collection outcomes and saved settings</summary><pre>{{ obs.fetch|tojson(indent=2) }}</pre><pre>{{ obs.parameters|tojson(indent=2) }}</pre><ul>{% for reason in art.contract_outcomes.reasons %}<li>{{ reason.label }}: {{ reason.count }}</li>{% endfor %}</ul></details>
+    </section>
+  {% endfor %}
+  {% if comparison %}<section class="surface-card history-observation"><h2>Change in IV · B minus A</h2><p>{{ comparison.supported_points }} supported comparison points. Mean change {{ '%.4f'|format(comparison.mean_change_vol_points) }} IV points.</p><p>Common domain: strike ${{ '%.2f'|format(comparison.domain.strike_min) }}–${{ '%.2f'|format(comparison.domain.strike_max) }}, DTE {{ '%.2f'|format(comparison.domain.dte_min) }}–{{ '%.2f'|format(comparison.domain.dte_max) }}.</p><p class="history-muted">{{ comparison.unsupported_points }} unsupported points excluded. Blank areas have no jointly supported values; there is no extrapolation. Grid differences are interpolated fitted values, not additional observed chains. DTE compares maturity relative to each original observation.</p>{{ comparison.plot_html|safe }}</section>{% endif %}
+  <section class="message-card"><h2>Methodology</h2><p>Observed markers show IV inverted from saved quotes using the existing European Black-Scholes-Merton pipeline. The fitted surface adjusts and interpolates those inputs. Spot changes and remaining maturity both affect the comparison. Internal repricing checks numerical consistency, not independent market accuracy or predictive performance.</p></section>
+  </main>
+</div></body></html>

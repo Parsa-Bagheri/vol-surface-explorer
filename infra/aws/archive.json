@@ -1,0 +1,16 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Optional isolated volatility observation archive; prepared, not deployed.",
+  "Resources": {
+    "ObservationArchive": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {"BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": true, "RestrictPublicBuckets": true},
+        "BucketEncryption": {"ServerSideEncryptionConfiguration": [{"ServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]},
+        "LifecycleConfiguration": {"Rules": [{"Id": "TemporaryDemoRetention", "Status": "Enabled", "ExpirationInDays": 30, "AbortIncompleteMultipartUpload": {"DaysAfterInitiation": 1}}]}
+      }
+    }
+  },
+  "Outputs": {"ArchiveBucket": {"Value": {"Ref": "ObservationArchive"}}}
+}

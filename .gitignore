@@ -186,3 +186,9 @@ cython_debug/
 .tmp.driveupload/
 UI_UX_IMPROVEMENT_IDEAS.md
 UI_UX_improvements_ideas.md
+
+# Immutable local observation lake and generated demo exports
+data/history/
+demo-output/
+.playwright-cli/
+output/playwright/
