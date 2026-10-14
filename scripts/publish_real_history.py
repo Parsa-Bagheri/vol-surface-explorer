@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+from contextlib import redirect_stdout
 import json
 from pathlib import Path
 import sys
@@ -348,14 +349,16 @@ def main(argv=None):
         if args.command == "prepare":
             if not args.stack_template or not args.observations:
                 raise ObservationError("Prepare requires --stack-template and --observations SNAPSHOT:PROCESSING.")
-            result = prepare(LocalObservationStore(args.store), selections(args.observations), args.output, args.stack_template)
+            with redirect_stdout(sys.stderr):
+                result = prepare(LocalObservationStore(args.store), selections(args.observations), args.output, args.stack_template)
         else:
             if not args.execute:
                 raise ObservationError("Cloud commands require --execute after approval; prepare performs no cloud calls.")
             plan = read_plan(args.output)
             cli = AwsCli(args.output, args.profile, args.aws_cli)
             account = check_account(cli, args.expected_account)
-            result = {"update-stack": update_stack, "publish": publish, "verify": verify}[args.command](cli, plan, account)
+            with redirect_stdout(sys.stderr):
+                result = {"update-stack": update_stack, "publish": publish, "verify": verify}[args.command](cli, plan, account)
         print(json.dumps(result, indent=2))
         return 0
     except (ObservationError, OSError, ValueError) as exc:

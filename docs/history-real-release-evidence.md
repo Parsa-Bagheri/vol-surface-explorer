@@ -1,6 +1,6 @@
 # Real-data release evidence
 
-Prepared October 13, 2026 (New York). **Local implementation verified; real AWS execution and public deployment pending approval.** This record is separate from the earlier [synthetic AWS demonstration](history-aws-verification.md).
+Prepared October 13, 2026 (New York). **Local implementation, real AWS publication/verification and Vercel preview passed. Production is being staged under the user's explicit approval.** This record is separate from the earlier [synthetic AWS demonstration](history-aws-verification.md).
 
 Two real yfinance/Yahoo SPY observations were collected manually on October 13 at **10:40:48 PM** and **10:45:43 PM EDT**. Their original UTC valuation clocks are October 14, 02:40:48.430117 and 02:45:43.381473. The UTC partition date is therefore October 14. No timestamp was backfilled or replaced with today's inputs during replay.
 
@@ -25,13 +25,15 @@ Local browser verification rendered both surfaces, observed quote markers and th
 
 Durable design: local immutable collector store and approved S3 archive; the web deployment reads the committed verified bundle. Proposed real archive/projection/release retention is 365 days, query results one day. No recurring collector or query schedule has been enabled. See [release architecture, cost and rollback](history-release.md).
 
-Pending execution fields:
+The approved existing CloudFormation stack update completed successfully. It retained the synthetic resources and added the real table and three scoped 365-day lifecycle rules. Both real archives/projections were published with conditional immutable writes, registered under the exact date/ticker/processing-version partitions and downloaded successfully. Checksums and both original-clock/spot replays matched at 1e-10. One Athena engine v3 query matched all DuckDB count/partial/version rows. It scanned **1,588 bytes**, separately from its **10,000,000 estimated billed bytes** (minimum billing), for an estimated **$0.00005 USD** Athena cost before credits. This is not an observed account charge.
 
-- Release commit: pending local commit.
-- Real S3 archives and checksummed download/replay: not yet executed.
-- Real Glue partitions: not yet registered.
-- Athena query/reconciliation, scanned bytes and billed-byte estimate: not yet executed.
-- Preview/staged production deployment and public `/history`/live checks: not yet executed.
-- Production promotion/PR merge: awaiting specific approval.
+The protected [verified preview](https://vol-surf-explorer-345z9l18y-parsa-bagheris-projects.vercel.app/history) is READY: `dpl_FiVtuKSHGnUh7WAqtnSy2jUyemgB`, source `dded5411db02d619b57efd1af72051a683699e6a`. The actual Linux Python 3.12 build passed using the documented large-functions beta setting on the existing Hobby plan. Its history listing, both explicitly selected processing versions and comparison passed; all **18 artifact downloads matched the committed files byte-for-byte**. There were 23 bounded history/landing/download checks and a separate successful live SPY surface request. History/live pages returned `no-store`; no AWS credentials were configured in Flask/Vercel.
+
+Release identifiers/status:
+
+- Initial implementation commit: `dded5411db02d619b57efd1af72051a683699e6a`.
+- Real AWS archive/partition/query verification: passed; detailed query/resource identifiers stay private.
+- Staged production deployment and public `/history`/live checks: pending execution.
+- Production promotion/PR merge: explicitly approved, pending verified staged build.
 
 Detailed account/resource identifiers and raw cloud outputs remain in ignored private evidence rather than this public note.

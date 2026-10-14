@@ -1,6 +1,6 @@
 # Real-observation release
 
-Prepared October 13, 2026 (America/New_York). Local implementation and real-data verification are complete. AWS real-data execution and production promotion await the operator's approval. Earlier synthetic AWS evidence remains in [history-aws-verification.md](history-aws-verification.md).
+Prepared October 13, 2026 (America/New_York). The operator approved the bounded AWS scope and tested public release. Real-data AWS publication/round trips and preview verification are complete; production is being staged. See [current execution evidence](history-real-release-evidence.md). Earlier synthetic AWS evidence remains in [history-aws-verification.md](history-aws-verification.md).
 
 ## Data and web architecture
 
@@ -53,7 +53,9 @@ python scripts/publish_real_history.py verify --output demo-output/real-run --ex
 
 `--aws-cli` can name the installed executable. Re-running `update-stack` after completion is an idempotent no-op. `verify` checks remote partition locations, downloads archives, validates checksums/replay, and reconciles one Athena query with DuckDB. Its stable request token reuses the same query rather than launching another paid query on a retry. It records actual scanned bytes separately from estimated billed bytes. A failed/cancelled query needs explicit review before choosing a new query identity.
 
-Update existing PR #4 with the reviewed source, bundle and redacted evidence. On the linked Vercel project, create a preview and verify `/`, `/history`, both selected versions, the common-domain comparison, all downloads and a bounded live SPY request. Stage production with `vercel deploy --prod --skip-domain`, verify that build, then promote it with `vercel promote DEPLOYMENT_URL`. Merge/promotion requires the user's specific approval. Preserve deployment protection. Python bundles above the host's default limit may require the large-functions setting; inspect the build result before changing it. No new paid plan is authorized by this procedure.
+Update existing PR #4 with the reviewed source, bundle and redacted evidence. On the linked Vercel project, create a preview and verify `/`, `/history`, both selected versions, the common-domain comparison, all downloads and a bounded live SPY request. `scripts/verify_deployed_history.py` checks an exact deployment and compares all 18 downloads against the committed bundle; `--include-live` adds one bounded live SPY request. Protected builds use the installed CLI's authenticated `vercel curl`, without disabling protection. Stage production with `vercel deploy --prod --skip-domain`, verify that build, then promote it with `vercel promote DEPLOYMENT_URL`. Merge/promotion requires the user's specific approval, received for this release. No new paid plan is authorized by this procedure.
+
+The initial preview exceeded the default Python bundle limit: 514.81 MB versus 500 MB. The documented [large-functions beta](https://vercel.com/changelog/vercel-functions-can-now-be-up-to-5-gb-in-package-size) setting `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` was enabled for preview, which then built successfully on the existing Hobby plan. Enable the same non-secret setting for production before staging. No numerical dependency was removed. A local `vercel build` attempt lacked `uv`; the actual Linux host's successful build, not that attempt, establishes packaging compatibility.
 
 ## Rollback and cleanup
 
