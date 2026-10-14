@@ -1,6 +1,6 @@
 # Real-data release evidence
 
-Prepared October 13, 2026 (New York). **Local implementation, real AWS publication/verification and Vercel preview passed. Production is being staged under the user's explicit approval.** This record is separate from the earlier [synthetic AWS demonstration](history-aws-verification.md).
+Prepared October 13, 2026 (New York). **Local implementation, real AWS publication/verification, Vercel preview and staged production checks passed. Public promotion is proceeding under the user's explicit approval.** This record is separate from the earlier [synthetic AWS demonstration](history-aws-verification.md).
 
 Two real yfinance/Yahoo SPY observations were collected manually on October 13 at **10:40:48 PM** and **10:45:43 PM EDT**. Their original UTC valuation clocks are October 14, 02:40:48.430117 and 02:45:43.381473. The UTC partition date is therefore October 14. No timestamp was backfilled or replaced with today's inputs during replay.
 
@@ -29,11 +29,13 @@ The approved existing CloudFormation stack update completed successfully. It ret
 
 The protected [verified preview](https://vol-surf-explorer-345z9l18y-parsa-bagheris-projects.vercel.app/history) is READY: `dpl_FiVtuKSHGnUh7WAqtnSy2jUyemgB`, source `dded5411db02d619b57efd1af72051a683699e6a`. The actual Linux Python 3.12 build passed using the documented large-functions beta setting on the existing Hobby plan. Its history listing, both explicitly selected processing versions and comparison passed; all **18 artifact downloads matched the committed files byte-for-byte**. There were 23 bounded history/landing/download checks and a separate successful live SPY surface request. History/live pages returned `no-store`; no AWS credentials were configured in Flask/Vercel.
 
+The READY staged production build is `dpl_7fGQkPFgEsSpZCSm2NLLmSnbVhaj`, source `4bfbfcfb7d6c99538948114ed05c4a69e95d2c97`, at `vol-surf-explorer-eqwwjoftz-parsa-bagheris-projects.vercel.app`. It independently passed **24 bounded endpoint checks**, including a fresh live SPY surface and all 18 byte-matching downloads. Production and preview use `VERCEL_SUPPORT_LARGE_FUNCTIONS=1`; the account remains on Hobby. A second replay of both downloaded AWS exports passed with network/provider/current-clock access blocked. The post-run AWS account metadata still reported Free/Active with $120 credits; billing can lag and that is not proof of zero charges.
+
 Release identifiers/status:
 
 - Initial implementation commit: `dded5411db02d619b57efd1af72051a683699e6a`.
 - Real AWS archive/partition/query verification: passed; detailed query/resource identifiers stay private.
-- Staged production deployment and public `/history`/live checks: pending execution.
-- Production promotion/PR merge: explicitly approved, pending verified staged build.
+- Staged production deployment/checks: passed at the deployment/source above.
+- Public `/history`/live checks and production promotion/PR merge: explicitly approved; final status will be recorded after execution.
 
 Detailed account/resource identifiers and raw cloud outputs remain in ignored private evidence rather than this public note.

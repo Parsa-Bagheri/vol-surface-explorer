@@ -1,6 +1,6 @@
 # Real-observation release
 
-Prepared October 13, 2026 (America/New_York). The operator approved the bounded AWS scope and tested public release. Real-data AWS publication/round trips and preview verification are complete; production is being staged. See [current execution evidence](history-real-release-evidence.md). Earlier synthetic AWS evidence remains in [history-aws-verification.md](history-aws-verification.md).
+Prepared October 13, 2026 (America/New_York). The operator approved the bounded AWS scope and tested public release. Real-data AWS publication/round trips, preview verification and staged production checks are complete; public promotion is proceeding. See [current execution evidence](history-real-release-evidence.md). Earlier synthetic AWS evidence remains in [history-aws-verification.md](history-aws-verification.md).
 
 ## Data and web architecture
 
