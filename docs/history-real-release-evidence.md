@@ -1,6 +1,6 @@
 # Real-data release evidence
 
-Prepared October 13, 2026 (New York). **Local implementation, real AWS publication/verification, Vercel preview and staged production checks passed. Public promotion is proceeding under the user's explicit approval.** This record is separate from the earlier [synthetic AWS demonstration](history-aws-verification.md).
+Released October 13, 2026 (New York). **Local implementation, real AWS publication/verification and public release are complete.** [Public saved observations](https://www.volexplorer.ca/history). This record is separate from the earlier [synthetic AWS demonstration](history-aws-verification.md).
 
 Two real yfinance/Yahoo SPY observations were collected manually on October 13 at **10:40:48 PM** and **10:45:43 PM EDT**. Their original UTC valuation clocks are October 14, 02:40:48.430117 and 02:45:43.381473. The UTC partition date is therefore October 14. No timestamp was backfilled or replaced with today's inputs during replay.
 
@@ -31,11 +31,17 @@ The protected [verified preview](https://vol-surf-explorer-345z9l18y-parsa-baghe
 
 The READY staged production build is `dpl_7fGQkPFgEsSpZCSm2NLLmSnbVhaj`, source `4bfbfcfb7d6c99538948114ed05c4a69e95d2c97`, at `vol-surf-explorer-eqwwjoftz-parsa-bagheris-projects.vercel.app`. It independently passed **24 bounded endpoint checks**, including a fresh live SPY surface and all 18 byte-matching downloads. Production and preview use `VERCEL_SUPPORT_LARGE_FUNCTIONS=1`; the account remains on Hobby. A second replay of both downloaded AWS exports passed with network/provider/current-clock access blocked. The post-run AWS account metadata still reported Free/Active with $120 credits; billing can lag and that is not proof of zero charges.
 
+[PR #4](https://github.com/Parsa-Bagheri/vol-surface-explorer/pull/4) was merged under the user's approval: merge commit `06415be130dd9a01f1bbe884bb2d57f74b0ddd25` (PR head `b5cd54e117f6cbe3a5b6944aa21db4836ce71c89`). The exact tested staged build above was promoted to the existing public domain. Its application source is `4bfbfcf`; later commits contain release documentation only and do not change the deployed app.
+
+Anonymous checks against `https://www.volexplorer.ca` passed **24 checks**, including the catalog, each selected version, comparison, all **18 byte-matching downloads**, and one real live SPY surface. The browser rendered all three figures with no console warnings/errors. The bounded 15-minute post-release runtime-error query returned no error records. [Full public screenshot](images/real-history-public.png) and [comparison screenshot](images/real-history-comparison.png). Preview and the newly created production deployment independently retained the same committed bundle, including the original provenance and byte-identical downloads. Temporary instance storage is not the durable source.
+
+Rollback candidate recorded before release: `dpl_9J3d2MGwXER8wJj3ubNmAAJerRdr`, the earlier READY production application. No rollback was needed. The release retains normal Vercel protection on deployment URLs; custom production domains are public as before. No recurring collection/query, external monitoring service or log drain was installed; runtime logs and explicit bounded checks supplied this release's operational evidence.
+
 Release identifiers/status:
 
 - Initial implementation commit: `dded5411db02d619b57efd1af72051a683699e6a`.
 - Real AWS archive/partition/query verification: passed; detailed query/resource identifiers stay private.
 - Staged production deployment/checks: passed at the deployment/source above.
-- Public `/history`/live checks and production promotion/PR merge: explicitly approved; final status will be recorded after execution.
+- Public `/history`/live checks and production promotion/PR merge: passed/completed under explicit approval.
 
 Detailed account/resource identifiers and raw cloud outputs remain in ignored private evidence rather than this public note.

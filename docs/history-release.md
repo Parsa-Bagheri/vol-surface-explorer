@@ -1,6 +1,6 @@
 # Real-observation release
 
-Prepared October 13, 2026 (America/New_York). The operator approved the bounded AWS scope and tested public release. Real-data AWS publication/round trips, preview verification and staged production checks are complete; public promotion is proceeding. See [current execution evidence](history-real-release-evidence.md). Earlier synthetic AWS evidence remains in [history-aws-verification.md](history-aws-verification.md).
+Released October 13, 2026 (America/New_York). The operator approved the bounded AWS scope and tested public release. Real-data AWS publication/round trips, preview/staged/public verification, PR merge and production promotion are complete. See [execution evidence](history-real-release-evidence.md). Earlier synthetic AWS evidence remains in [history-aws-verification.md](history-aws-verification.md).
 
 ## Data and web architecture
 
@@ -55,7 +55,7 @@ python scripts/publish_real_history.py verify --output demo-output/real-run --ex
 
 Update existing PR #4 with the reviewed source, bundle and redacted evidence. On the linked Vercel project, create a preview and verify `/`, `/history`, both selected versions, the common-domain comparison, all downloads and a bounded live SPY request. `scripts/verify_deployed_history.py` checks an exact deployment and compares all 18 downloads against the committed bundle; `--include-live` adds one bounded live SPY request. Protected builds use the installed CLI's authenticated `vercel curl`, without disabling protection. Stage production with `vercel deploy --prod --skip-domain`, verify that build, then promote it with `vercel promote DEPLOYMENT_URL`. Merge/promotion requires the user's specific approval, received for this release. No new paid plan is authorized by this procedure.
 
-The initial preview exceeded the default Python bundle limit: 514.81 MB versus 500 MB. The documented [large-functions beta](https://vercel.com/changelog/vercel-functions-can-now-be-up-to-5-gb-in-package-size) setting `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` was enabled for preview, which then built successfully on the existing Hobby plan. Enable the same non-secret setting for production before staging. No numerical dependency was removed. A local `vercel build` attempt lacked `uv`; the actual Linux host's successful build, not that attempt, establishes packaging compatibility.
+The initial preview exceeded the default Python bundle limit: 514.81 MB versus 500 MB. The documented [large-functions beta](https://vercel.com/changelog/vercel-functions-can-now-be-up-to-5-gb-in-package-size) setting `VERCEL_SUPPORT_LARGE_FUNCTIONS=1` was enabled for preview and production; both then built successfully on the existing Hobby plan. For a new project/check-out, configure that non-secret setting before deploying this dependency set. No numerical dependency was removed. A local `vercel build` attempt lacked `uv`; the actual Linux host's successful builds establish packaging compatibility.
 
 ## Rollback and cleanup
 
