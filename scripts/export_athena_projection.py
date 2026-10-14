@@ -11,13 +11,15 @@ import pandas as pd
 from src.history_store import LocalObservationStore, ObservationError, file_digest, local_path
 
 
-def export_projection(store, snapshot_id, processing_id, root):
+def export_projection(store, snapshot_id, processing_id, root, *, versioned=False):
     observation = store.load(snapshot_id)[0]
     store.load_artifact(snapshot_id, processing_id)
     data = pd.read_parquet(store.artifact_path(snapshot_id, processing_id) / "coverage.parquet")
     data = data.drop(columns="ticker")
     data["valuation_time_utc"] = data.valuation_time_utc.dt.tz_convert("UTC").dt.tz_localize(None)
     directory = local_path(root) / f"date={observation['valuation_time_utc'][:10]}" / f"ticker={observation['ticker']}"
+    if versioned:
+        directory /= f"version={LocalObservationStore._id(processing_id)}"
     directory.mkdir(parents=True, exist_ok=True)
     output = directory / f"{snapshot_id}.parquet"
     if output.exists():

@@ -254,7 +254,7 @@ def bounded_query(cli, outputs, plan):
 
 def verify(cli, plan, account):
     stack, outputs = stack_state(cli, plan, account)
-    if stack["StackStatus"] != "CREATE_COMPLETE":
+    if stack["StackStatus"] not in {"CREATE_COMPLETE", "UPDATE_COMPLETE"}:
         raise ObservationError("Verify requires a completed dedicated demo stack.")
     config = cli.call("athena", "get-work-group", {"WorkGroup": outputs["WorkGroup"]})["WorkGroup"]["Configuration"]
     expected_result = f"s3://{outputs['ArchiveBucket']}/results/"

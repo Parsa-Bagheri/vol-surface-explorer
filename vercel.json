@@ -1,5 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "history_bundle/**",
+      "excludeFiles": "{tests/**,docs/**,data/**,demo-output/**,.venv/**,scripts/**,infra/**}"
+    }
+  },
   "headers": [
     {
       "source": "/static/(.*)",

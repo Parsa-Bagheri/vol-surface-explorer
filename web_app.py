@@ -140,10 +140,12 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 1024
-    app.config["HISTORY_ROOT"] = history_root or os.environ.get("VOL_HISTORY_ROOT", "data/history")
+    configured_history = history_root or os.environ.get("VOL_HISTORY_ROOT")
+    app.config["HISTORY_ROOT"] = str((Path(__file__).parent / (configured_history or "history_bundle")).resolve())
+    app.config["HISTORY_BUNDLE_REQUIRED"] = not configured_history or bool(os.environ.get("VERCEL"))
     asset_versions = {
         name: hashlib.sha256((Path(app.static_folder) / name).read_bytes()).hexdigest()[:12]
-        for name in ("app.css", "app.js")
+        for name in ("app.css", "app.js", "history.css")
     }
 
     @app.after_request
@@ -224,9 +226,10 @@ def create_app(
         error = None
         left_id, right_id = request.args.get("left", ""), request.args.get("right", "")
         try:
-            from src.history_store import LocalObservationStore, ObservationError
+            from src.history_store import ObservationError
+            from src.history_reader import open_history_store
             from src.history_compare import compare_observations, saved_figure
-            store = LocalObservationStore(app.config["HISTORY_ROOT"])
+            store = open_history_store(app.config["HISTORY_ROOT"], require_bundle=app.config["HISTORY_BUNDLE_REQUIRED"])
             observations, invalid = store.list()
             for observation in observations:
                 artifacts = []
@@ -268,9 +271,9 @@ def create_app(
 
     @app.get("/history/<snapshot_id>/files/<name>")
     def history_file(snapshot_id, name):
-        from src.history_store import LocalObservationStore
-        store = LocalObservationStore(app.config["HISTORY_ROOT"])
+        from src.history_reader import open_history_store
         try:
+            store = open_history_store(app.config["HISTORY_ROOT"], require_bundle=app.config["HISTORY_BUNDLE_REQUIRED"])
             store.load(snapshot_id)
             if name in {"raw.parquet", "observation.parquet", "manifest.json"}:
                 path = store.observation_path(snapshot_id) / name

@@ -4,7 +4,7 @@ Historical mode captures the inputs to the existing financial pipeline, includin
 
 ## Local setup and demo
 
-The existing live web and `main.py` paths keep their current dependencies. Install the optional history dependencies for local persistence and SQL:
+The standard runtime dependencies now include history persistence and SQL for the prepared web release. Install development dependencies for local collection and tests:
 
 ```powershell
 python -m venv .venv
@@ -53,7 +53,7 @@ CRON_TZ=America/New_York
 
 Cadence and watchlist are bounded by the operator; the CLI caps a pass at ten tickers. No background scheduler runs inside Flask. Yahoo can return delayed/fallback spot values, incomplete chains or rate-limit failures. Per-expiration outcomes and spot source timestamps make those limits visible. The underlying spot provenance identifies a history-close fallback and its bar timestamp, or marks the source timestamp unavailable for info fallbacks. A bar timestamp does not assert the exact last trade time of that spot.
 
-Flask's deployed Vercel filesystem is ephemeral and is not the collection host. Historical mode is intended for a persistent local host or a separately prepared read-only data bundle. Configure `VOL_HISTORY_ROOT` to that store; do not assume a live web request durably schedules or saves data.
+Flask's deployed Vercel filesystem is ephemeral and is not the collection host. The web app defaults to the committed read-only `history_bundle/`, resolved relative to the application source. Configure `VOL_HISTORY_ROOT` to a persistent local store when developing. On Vercel, an explicitly configured root must also contain a valid release catalog. See [real release preparation and publishing](history-release.md); live requests never collect or publish history.
 
 ## Versioned contract, keys, and lineage
 

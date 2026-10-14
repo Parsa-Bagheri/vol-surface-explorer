@@ -1,4 +1,4 @@
-"""Verified local exports and optional immutable S3 transport (not deployed)."""
+"""Verified local exports and immutable S3 transport, independent of web requests."""
 from __future__ import annotations
 
 import json
