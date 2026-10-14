@@ -8,10 +8,9 @@
   <script src="{{ url_for('static', filename='app.js', v=asset_versions['app.js']) }}" defer></script>
 </head>
 <body>
-  <div class="app-shell">
+  <div class="app-shell home-shell">
     <header class="app-header">
       <h1>Volatility Surface Explorer</h1>
-      <a href="/history">Saved observations</a>
     </header>
 
     <form method="get" action="/" class="control-form">
@@ -155,6 +154,9 @@
         </details>
       {% endif %}
     </main>
+    <footer class="app-footer">
+      <a href="{{ url_for('history') }}">click here to see saved surfaces</a>
+    </footer>
   </div>
 </body>
 </html>

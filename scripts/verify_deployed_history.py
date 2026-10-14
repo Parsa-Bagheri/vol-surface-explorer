@@ -59,7 +59,7 @@ def verify_deployment(url, bundle, output, vercel_cli=None, node="node", scope=N
                 text = body.decode("utf-8")
                 assert "Observation unavailable" not in text and "error-card" not in text, f"App error: {path}"
                 if kind == "landing":
-                    assert "Saved observations" in text
+                    assert "click here to see saved surfaces" in text
                 elif kind == "catalog":
                     assert all(i["snapshot_id"] in text for i in selected)
                 elif kind == "observation":

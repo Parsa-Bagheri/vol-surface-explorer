@@ -52,6 +52,29 @@ input {
   text-align: center;
 }
 
+.home-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-footer {
+  margin-top: auto;
+  padding-top: 28px;
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+.app-footer a {
+  color: var(--muted);
+  text-underline-offset: 3px;
+}
+
+.app-footer a:hover,
+.app-footer a:focus-visible {
+  color: var(--text);
+}
+
 h1,
 h2,
 p {
