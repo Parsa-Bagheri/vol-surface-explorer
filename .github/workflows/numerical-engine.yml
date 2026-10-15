@@ -1,5 +1,11 @@
 name: Numerical engine
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: numerical-engine-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   native:
     strategy:
@@ -22,6 +28,8 @@ jobs:
       - run: ctest --test-dir build/native -C Release --output-on-failure
       - name: Require extension (never silently skip native tests)
         run: python -c "from src import _vol_native; print(_vol_native.compiler, _vol_native.build_type)"
+      - name: Prepare short test workspace
+        run: python -c "from pathlib import Path; Path('.tmp_pytest').mkdir(exist_ok=True)"
       - name: Complete suite with C++ forced
         env:
           VOL_NUMERICAL_BACKEND: cpp
@@ -39,6 +47,8 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -r requirements-dev.txt
+      - name: Prepare short test workspace
+        run: python -c "from pathlib import Path; Path('.tmp_pytest').mkdir(exist_ok=True)"
       - name: Verify auto without a compiler or extension
         env:
           VOL_NUMERICAL_BACKEND: auto
