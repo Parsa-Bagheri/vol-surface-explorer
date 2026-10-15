@@ -1,0 +1,45 @@
+name: Numerical engine
+on: [push, pull_request]
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ['3.12', '3.14']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt -r requirements-native.txt
+      - name: Configure Release
+        shell: bash
+        run: cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE="$(python -c 'import sys; print(sys.executable)')"
+      - run: cmake --build build/native --config Release --parallel 2
+      - run: ctest --test-dir build/native -C Release --output-on-failure
+      - name: Require extension (never silently skip native tests)
+        run: python -c "from src import _vol_native; print(_vol_native.compiler, _vol_native.build_type)"
+      - name: Complete suite with C++ forced
+        env:
+          VOL_NUMERICAL_BACKEND: cpp
+        run: python -m pytest -q --basetemp .tmp_pytest/ci-cpp
+      - name: Complete suite with Python forced
+        env:
+          VOL_NUMERICAL_BACKEND: python
+        run: python -m pytest -q --basetemp .tmp_pytest/ci-python
+  optional-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Verify auto without a compiler or extension
+        env:
+          VOL_NUMERICAL_BACKEND: auto
+        run: python -m pytest -q --basetemp .tmp_pytest/ci-auto

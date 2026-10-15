@@ -13,6 +13,11 @@ tests
 docs
 environment.yml
 .venv
+build
+**/*.pyd
+**/*.so
+**/*.dll
+**/*.pdb
 data
 demo-output
 .playwright-cli

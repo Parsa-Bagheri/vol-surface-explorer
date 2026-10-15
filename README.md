@@ -177,6 +177,17 @@ The external benchmark compares cleaned quote-derived IV values, not the project
 
 ## Performance
 
+An optional C++17/pybind11 engine now batches BSM pricing and bounded IV solving
+through the application, CLI and historical processor. `VOL_NUMERICAL_BACKEND`
+selects `python`, `cpp` or `auto` (the default); the CLI also accepts `--backend`.
+The existing Python installation remains sufficient. See [native build, backend,
+replay and benchmark instructions](docs/cpp-engine.md) and [fresh measurements
+and validation evidence](docs/cpp-engine-results.md).
+
 The homepage does not import NumPy, pandas, SciPy, Plotly, or yfinance until a surface is requested. Surface builds reuse quote selection for both plotting and reporting, and exclusion accounting is vectorized.
 
-On a replayed 2,687-contract SPY snapshot with matched settings, the September 28, 2026 local warm-build benchmark improved from about 4.06 seconds to 2.82 seconds, excluding Yahoo fetching and browser rendering. Fresh surface requests still require network access and fitting; this is not a sub-second fresh-surface guarantee.
+The earlier September 28, 2026 optimization measured 4.06 seconds to 2.82 seconds
+on a different 2,687-contract SPY snapshot. That result is historical context,
+not evidence for the C++ upgrade. Fresh surface requests still require network
+access and fitting; warm computation timings exclude Yahoo fetching and browser
+rendering.

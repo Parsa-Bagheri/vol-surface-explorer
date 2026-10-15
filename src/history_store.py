@@ -1,7 +1,7 @@
 """Immutable local observation lake. Manifests are the publication boundary."""
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, date
 import hashlib
 import importlib.metadata
@@ -20,12 +20,13 @@ import pandas as pd
 from src.surface_config import SurfaceRequest
 from src.surface_service import _validated_request, process_surface_inputs
 from src.time_utils import normalize_as_of_utc
+from src.numerical_engine import numerical_session, backend_identity
 
 SCHEMA_VERSION = 1
 PROCESSING_VERSION = "history-v1"
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")
 CODE_FILES = ("data_cleaner.py", "visualizer.py", "contract_outcomes.py", "time_utils.py",
-              "surface_service.py", "surface_config.py", "history_store.py")
+              "surface_service.py", "surface_config.py", "history_store.py", "numerical_engine.py")
 
 
 class ObservationError(ValueError):
@@ -82,9 +83,17 @@ def processing_identity() -> dict:
     root = Path(__file__).parent
     versions = {name: importlib.metadata.version(name)
                 for name in ("numpy", "pandas", "scipy", "plotly", "pyarrow")}
+    sources = {name: source_digest(root / name) for name in CODE_FILES}
+    sources.update({f"native/{p.name}": source_digest(p) for p in sorted((root.parent / "native").iterdir())
+                    if p.suffix in {".cpp", ".hpp", ".in", ".txt"}})
     return {"version": PROCESSING_VERSION,
-            "code_sha256": digest({name: source_digest(root / name) for name in CODE_FILES}),
-            "dependencies": versions}
+            "code_sha256": digest(sources), "dependencies": versions,
+            "numerical_engine": backend_identity()}
+
+
+def _collection_processor(request):
+    with numerical_session(request.numerical_backend):
+        return processing_identity()
 
 
 def _utc(value: Any, label: str) -> str:
@@ -228,7 +237,7 @@ class LocalObservationStore:
                                    if item.get("status") in {"failed", "empty"}})
         payload = {"schema_version": SCHEMA_VERSION, "kind": "observation", "ticker": request.ticker,
                    "valuation_time_utc": valuation, "spot": spot, "parameters": asdict(request),
-                   "source_kind": source_kind, "label": label, "processing_at_collection": processing_identity(),
+                   "source_kind": source_kind, "label": label, "processing_at_collection": _collection_processor(request),
                    "fetch": fetch, "expected_expirations": expected, "received_expirations": received,
                    "missing_expirations": failed, "failed_expirations": outcome_failures,
                    "partial": bool(failed or outcome_failures), "raw_row_count": len(raw),
@@ -373,15 +382,21 @@ class LocalObservationStore:
             raise ObservationError(f"Invalid processed Parquet schema: {exc}") from exc
         return payload
 
-    def process(self, snapshot_id: str) -> dict:
+    def process(self, snapshot_id: str, *, backend: str | None = None) -> dict:
         observation, raw = self.load(snapshot_id)
+        requested = backend if backend is not None else observation["parameters"].get("numerical_backend")
+        with numerical_session(requested):
+            return self._process(snapshot_id, observation, raw)
+
+    def _process(self, snapshot_id: str, observation: dict, raw: pd.DataFrame) -> dict:
         processor = processing_identity()
         processing_id = digest({"raw_sha256": observation["files"]["raw.parquet"]["sha256"],
                                 "parameters": observation["parameters"], "processor": processor})[:24]
         destination = self.artifact_path(snapshot_id, processing_id)
         if destination.exists():
             return self.load_artifact(snapshot_id, processing_id)
-        result = process_surface_inputs(SurfaceRequest(**observation["parameters"]), raw,
+        request = replace(SurfaceRequest(**observation["parameters"]), numerical_backend=processor["numerical_engine"]["backend"])
+        result = process_surface_inputs(request, raw,
                                         observation["spot"]["value"], observation["valuation_time_utc"])
         selected = result.diagnostics["contract_outcomes"]
         if selected["fetched"] != selected["used"] + selected["excluded"]:
@@ -442,10 +457,12 @@ class LocalObservationStore:
                 raise ObservationError("Replay requires one saved processing artifact or an explicit processing_id; run process first.")
             processing_id = candidates[0]
         artifact = self.load_artifact(snapshot_id, processing_id)
-        if artifact["processor"] != processing_identity():
-            raise ObservationError("Original processing code/dependencies unavailable; use process to explicitly reprocess.")
-        result = process_surface_inputs(SurfaceRequest(**observation["parameters"]), raw,
-                                        observation["spot"]["value"], observation["valuation_time_utc"])
+        backend = artifact["processor"].get("numerical_engine", {}).get("backend", "python")
+        with numerical_session(backend):
+            if artifact["processor"] != processing_identity():
+                raise ObservationError("Original processing code/dependencies unavailable; use process to explicitly reprocess.")
+            request = replace(SurfaceRequest(**observation["parameters"]), numerical_backend=backend)
+            result = process_surface_inputs(request, raw, observation["spot"]["value"], observation["valuation_time_utc"])
         path = self.artifact_path(snapshot_id, artifact["processing_id"])
         saved = pd.read_parquet(path / "cleaned.parquet")
         columns = ["contractId", "days_to_expiration", "time_to_expiration_years", "impliedVolatilityFinal", "marketPrice"]

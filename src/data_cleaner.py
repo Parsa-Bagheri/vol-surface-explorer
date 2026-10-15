@@ -313,7 +313,7 @@ def _split_flags(flags: str) -> List[str]:
 
 
 def _select_market_price(
-    row: pd.Series,
+    row: pd.Series | Dict[str, object],
     max_trade_age_hours: float,
     spread_ratio_max: float,
     recompute_spread_ratio_max: float,
@@ -552,6 +552,7 @@ def _resolve_row_iv(
     dividend_yield: float,
     max_trade_age_hours: float,
     now_utc: pd.Timestamp,
+    precomputed: tuple | None = None,
 ) -> pd.Series:
     flags: Set[str] = set()
     quality_config = QUALITY_MODE_CONFIG[quality_mode]
@@ -578,7 +579,7 @@ def _resolve_row_iv(
     elif open_interest < quality_config["min_open_interest"]:
         flags.add("low_open_interest")
 
-    market_price, price_source, price_flags, spread_ratio = _select_market_price(
+    market_price, price_source, price_flags, spread_ratio = precomputed[0] if precomputed is not None else _select_market_price(
         row,
         max_trade_age_hours=max_trade_age_hours,
         spread_ratio_max=spread_ratio_max,
@@ -614,7 +615,7 @@ def _resolve_row_iv(
         if market_price < lower - ARBITRAGE_EPSILON or market_price > upper + ARBITRAGE_EPSILON:
             flags.add("arbitrage_violation")
         else:
-            bs_iv = _implied_volatility(
+            bs_iv = precomputed[1] if precomputed is not None else _implied_volatility(
                 option_type=option_type,
                 spot=underlying_price,
                 strike=strike,
@@ -633,7 +634,7 @@ def _resolve_row_iv(
                     ask_iv,
                     iv_bid_ask_width,
                     iv_bid_ask_width_ratio,
-                ) = _compute_bid_ask_iv_width(
+                ) = precomputed[2] if precomputed is not None else _compute_bid_ask_iv_width(
                     option_type=option_type,
                     spot=underlying_price,
                     strike=strike,
@@ -759,6 +760,36 @@ def _resolve_row_iv(
     )
 
 
+def _batch_quote_ivs(df, spot, rate, quality_mode, max_trade_age_hours, as_of_utc):
+    """Keep quote selection in Python and invert all three quote prices once.
+
+    Consume results in row order so duplicate input indices cannot affect joins.
+    """
+    from src.numerical_engine import implied_volatilities
+    config = QUALITY_MODE_CONFIG[quality_mode]
+    # iterrows() constructs a Series and deep-copies attached fetch diagnostics
+    # for every row. Only these four quote fields are needed by the selector.
+    quote_records = df[["bid", "ask", "lastPrice", "lastTradeDate"]].to_dict("records")
+    selections = [_select_market_price(row, max_trade_age_hours, config["spread_ratio_max"],
+                    config["recompute_spread_ratio_max"], as_of_utc) for row in quote_records]
+    market = np.array([selection[0] for selection in selections], dtype=float)
+    n = len(df)
+    result = implied_volatilities(
+        np.tile(df.optionType.astype(str).str.lower().to_numpy(), 3), spot,
+        np.tile(df.strike.to_numpy(dtype=float), 3),
+        np.tile(df.time_to_expiration_years.to_numpy(dtype=float), 3), rate,
+        np.concatenate((market, df.bid.to_numpy(dtype=float), df.ask.to_numpy(dtype=float))),
+        np.tile(df.dividendYieldUsed.to_numpy(dtype=float), 3), backend="cpp",
+    ).checked_values().reshape(3, n)
+    midpoint, bid_iv, ask_iv = result
+    width = np.maximum(ask_iv - bid_iv, 0.0)
+    denominator = np.where(np.isfinite(midpoint) & (midpoint > 0), midpoint, (bid_iv + ask_iv) / 2)
+    ratio = np.full(n, np.nan)
+    np.divide(width, denominator, out=ratio, where=np.isfinite(denominator) & (denominator > 0))
+    return iter((selection, midpoint[i], (bid_iv[i], ask_iv[i], width[i], ratio[i]))
+                for i, selection in enumerate(selections))
+
+
 def prepare_options_data(
     df: pd.DataFrame,
     min_strike: float = None,
@@ -774,6 +805,7 @@ def prepare_options_data(
     quality_mode: str = "lenient",
     max_trade_age_hours: float = 120.0,
     as_of_utc: pd.Timestamp = None,
+    numerical_backend: str | None = None,
 ) -> pd.DataFrame:
     """
     Clean and enrich options data for volatility-surface visualization.
@@ -881,6 +913,10 @@ def prepare_options_data(
         fallback_dividend_yield=dividend_yield,
     )
 
+    from src.numerical_engine import current_backend, resolve_backend
+    backend = resolve_backend(numerical_backend) if numerical_backend is not None else current_backend()
+    precomputed = _batch_quote_ivs(clean_df, underlying_price, risk_free_rate, quality_mode,
+                                  max_trade_age_hours, as_of_utc) if backend == "cpp" else None
     resolved = clean_df.apply(
         lambda row: _resolve_row_iv(
             row=row,
@@ -890,6 +926,7 @@ def prepare_options_data(
             dividend_yield=dividend_yield,
             max_trade_age_hours=max_trade_age_hours,
             now_utc=as_of_utc,
+            precomputed=next(precomputed) if precomputed is not None else None,
         ),
         axis=1,
     )
@@ -1040,14 +1077,15 @@ def build_internal_validation_report(
         )
     )
 
-    model_prices = _black_scholes_prices_array(
+    from src.numerical_engine import prices
+    model_prices = prices(
         option_types=option_types,
         spot=underlying_price,
         strikes=strikes,
-        time_to_expiration=times,
-        risk_free_rate=risk_free_rate,
+        times=times,
+        rate=risk_free_rate,
         volatility=implied_volatility,
-        dividend_yield=dividend_yields,
+        dividends=dividend_yields,
     )
     comparable_mask = market_price_mask & np.isfinite(model_prices)
 

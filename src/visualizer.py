@@ -6,11 +6,10 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from scipy.optimize import Bounds, LinearConstraint, minimize
+from src.numerical_engine import prices, implied_volatilities, NumericalBackendError
 
 from src.data_cleaner import (
     _black_scholes_price,
-    _black_scholes_prices_array,
-    _implied_volatility,
     _to_float,
 )
 
@@ -33,14 +32,14 @@ def _black_scholes_call_prices_array(
     volatility: np.ndarray,
     dividend_yield: float,
 ) -> np.ndarray:
-    return _black_scholes_prices_array(
+    return prices(
         option_types="call",
         spot=spot,
         strikes=strikes,
-        time_to_expiration=time_to_expiration,
-        risk_free_rate=risk_free_rate,
+        times=time_to_expiration,
+        rate=risk_free_rate,
         volatility=volatility,
-        dividend_yield=dividend_yield,
+        dividends=dividend_yield,
     )
 
 
@@ -292,21 +291,10 @@ def _project_total_variance_grid(
                 risk_free_rate=risk_free_rate,
                 dividend_yield=row_dividend_yield,
             )
-            total_variance[row_index] = np.array(
-                [
-                    _implied_volatility(
-                        option_type="call",
-                        spot=underlying_price,
-                        strike=float(strike),
-                        time_to_expiration=row_time,
-                        risk_free_rate=risk_free_rate,
-                        market_price=float(price),
-                        dividend_yield=row_dividend_yield,
-                    ) ** 2 * row_time
-                    for strike, price in zip(row_strikes, projected_prices)
-                ],
-                dtype=float,
-            )
+            total_variance[row_index] = implied_volatilities(
+                "call", underlying_price, row_strikes, row_time, risk_free_rate,
+                projected_prices, row_dividend_yield,
+            ).checked_values() ** 2 * row_time
         total_variance = np.maximum.accumulate(total_variance, axis=0)
     return total_variance
 
@@ -347,14 +335,14 @@ def select_surface_quotes(
         dividend_yield_used = pd.Series(dividend_yield, index=working_df.index)
     working_df["dividendYieldUsed"] = dividend_yield_used.astype(float)
 
-    surface_option_prices = _black_scholes_prices_array(
+    surface_option_prices = prices(
         option_types=option_types.to_numpy(dtype=object),
         spot=underlying_price,
         strikes=strikes,
-        time_to_expiration=time_to_expiration,
-        risk_free_rate=risk_free_rate,
+        times=time_to_expiration,
+        rate=risk_free_rate,
         volatility=implied_volatility,
-        dividend_yield=working_df["dividendYieldUsed"].to_numpy(dtype=float),
+        dividends=working_df["dividendYieldUsed"].to_numpy(dtype=float),
     )
     invalid_surface_price = ~np.isfinite(surface_option_prices) | (surface_option_prices <= 0)
     if np.any(invalid_surface_price):
@@ -534,16 +522,11 @@ def _build_arbitrage_free_surface(
             risk_free_rate=risk_free_rate,
             dividend_yield=slice_dividend_yield,
         )
-        for strike, projected_price in zip(strikes, projected_prices):
-            projected_iv = _implied_volatility(
-                option_type="call",
-                spot=underlying_price,
-                strike=float(strike),
-                time_to_expiration=time_to_expiration,
-                risk_free_rate=risk_free_rate,
-                market_price=float(projected_price),
-                dividend_yield=slice_dividend_yield,
-            )
+        projected_ivs = implied_volatilities(
+            "call", underlying_price, strikes, time_to_expiration, risk_free_rate,
+            projected_prices, slice_dividend_yield,
+        ).checked_values()
+        for strike, projected_iv in zip(strikes, projected_ivs):
             if np.isfinite(projected_iv):
                 slice_projected_iv[(int(days_to_expiration), float(strike))] = float(projected_iv)
 
@@ -614,20 +597,10 @@ def _build_arbitrage_free_surface(
             left=float(item["weights"][0]),
             right=float(item["weights"][-1]),
         )
-        for column_index, strike in enumerate(evaluation_strikes):
-            implied_volatility = _implied_volatility(
-                option_type="call",
-                spot=underlying_price,
-                strike=float(strike),
-                time_to_expiration=float(item["time_to_expiration_years"]),
-                risk_free_rate=risk_free_rate,
-                market_price=float(interpolated_prices[column_index]),
-                dividend_yield=float(item["dividend_yield"]),
-            )
-            if np.isfinite(implied_volatility):
-                total_variance[row_index, column_index] = float(
-                    implied_volatility**2 * item["time_to_expiration_years"]
-                )
+        total_variance[row_index] = implied_volatilities(
+            "call", underlying_price, evaluation_strikes, float(item["time_to_expiration_years"]),
+            risk_free_rate, interpolated_prices, float(item["dividend_yield"]),
+        ).checked_values() ** 2 * item["time_to_expiration_years"]
 
     if not np.all(np.isfinite(total_variance)):
         return slice_projected_iv, empty_grid, empty_grid, empty_grid, surface_nodes
@@ -844,6 +817,8 @@ def create_vol_surface(
             build_smooth_grid=bool(smooth),
             selected_quotes=selected_quotes,
         )
+    except NumericalBackendError:
+        raise
     except Exception as exc:
         print(f"Static-arbitrage-adjusted surface construction failed: {exc}")
         return go.Figure()
