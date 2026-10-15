@@ -1,0 +1,137 @@
+{
+  "snapshot_id": "6e471b7a5c5d8fe0695afacb",
+  "source_kind": "collected",
+  "raw_sha256": "c71bc9f90901974be3e73a306c1b7570cdfdd1c4a6fc45de910865dd33324a6b",
+  "valuation_time_utc": "2026-10-14T02:45:43.381473+00:00",
+  "parameters": {
+    "dividend_yield": 0.0,
+    "dte_max": 30,
+    "dte_min": 1,
+    "include_low_confidence": false,
+    "max_trade_age_hours": 120.0,
+    "quality_mode": "lenient",
+    "risk_free_rate": 0.02,
+    "smooth": true,
+    "strike_max_pct": 1.07,
+    "strike_min_pct": 0.93,
+    "ticker": "SPY"
+  },
+  "backend": "python",
+  "repeats": 7,
+  "environment": {
+    "os": "Windows-11-10.0.22631-SP0",
+    "python": "3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]",
+    "machine": "AMD64",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "logical_cpus": 12,
+    "dependencies": {
+      "numpy": "2.5.4",
+      "scipy": "1.18.1",
+      "pandas": "2.3.3",
+      "plotly": "6.9.0",
+      "pyarrow": "26.0.0"
+    }
+  },
+  "calculation": [
+    {
+      "contracts": 128,
+      "median_s": 0.018673499987926334,
+      "min_s": 0.01660429997718893,
+      "max_s": 0.08096849999856204,
+      "mad_s": 0.0017502999980933964,
+      "samples_s": [
+        0.029543799988459796,
+        0.018673499987926334,
+        0.017031399998813868,
+        0.016923199989832938,
+        0.01660429997718893,
+        0.08096849999856204,
+        0.01963590001105331
+      ]
+    },
+    {
+      "contracts": 512,
+      "median_s": 0.07607000001007691,
+      "min_s": 0.06777000002330169,
+      "max_s": 0.0883812999818474,
+      "mad_s": 0.004880099993897602,
+      "samples_s": [
+        0.07600719999754801,
+        0.06777000002330169,
+        0.07607000001007691,
+        0.0883812999818474,
+        0.08095010000397451,
+        0.07330089999595657,
+        0.08290770000894554
+      ]
+    },
+    {
+      "contracts": 1627,
+      "median_s": 0.2528096000023652,
+      "min_s": 0.2313070000091102,
+      "max_s": 0.2988042999932077,
+      "mad_s": 0.015639400022337213,
+      "samples_s": [
+        0.2988042999932077,
+        0.2361426000134088,
+        0.26670010000816546,
+        0.23717019998002797,
+        0.25770960000227205,
+        0.2528096000023652,
+        0.2313070000091102
+      ]
+    }
+  ],
+  "surface": [
+    {
+      "raw_contracts": 256,
+      "median_s": 1.2142823000031058,
+      "min_s": 1.1062161999871023,
+      "max_s": 1.291060000017751,
+      "mad_s": 0.029826899990439415,
+      "samples_s": [
+        1.1062161999871023,
+        1.2142823000031058,
+        1.2606991999782622,
+        1.2306430999888107,
+        1.1844554000126664,
+        1.291060000017751,
+        1.1930544000060763
+      ]
+    },
+    {
+      "raw_contracts": 1024,
+      "median_s": 1.5818611000140663,
+      "min_s": 1.5303726000129245,
+      "max_s": 1.7001555000024382,
+      "mad_s": 0.03703569999197498,
+      "samples_s": [
+        1.5818611000140663,
+        1.5448254000220913,
+        1.5303726000129245,
+        1.6278393999964464,
+        1.5460194000042975,
+        1.5899916000198573,
+        1.7001555000024382
+      ]
+    },
+    {
+      "raw_contracts": 2604,
+      "median_s": 2.1494038999953773,
+      "min_s": 2.06930669999565,
+      "max_s": 2.234293899993645,
+      "mad_s": 0.03255789997638203,
+      "samples_s": [
+        2.06930669999565,
+        2.2146169999905396,
+        2.162634000007529,
+        2.1168460000189953,
+        2.1339149000123143,
+        2.234293899993645,
+        2.1494038999953773
+      ]
+    }
+  ],
+  "scope": "Warm computation including array conversion/bindings and Plotly figure construction; excludes file reads, network, browser rendering, startup and compilation. Subsets are deterministic samples of real saved quotes, not synthetic contracts.",
+  "profile": "         5268013 function calls (4496778 primitive calls) in 3.895 seconds\n\n   Ordered by: cumulative time\n   List reduced from 1823 to 35 due to restriction <35>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    3.894    3.894 benchmark_numerics.py:61(build)\n        1    0.002    0.002    3.894    3.894 surface_service.py:132(process_surface_inputs)\n        1    0.000    0.000    2.155    2.155 visualizer.py:763(create_vol_surface)\n        1    0.015    0.015    2.094    2.094 visualizer.py:500(_build_arbitrage_free_surface)\n        1    0.002    0.002    1.583    1.583 data_cleaner.py:762(prepare_options_data)\n        3    0.000    0.000    1.251    0.417 frame.py:10197(apply)\n        3    0.005    0.002    1.251    0.417 apply.py:864(apply)\n        3    0.000    0.000    1.246    0.415 apply.py:1061(apply_standard)\n        2    0.044    0.022    1.111    0.556 visualizer.py:264(_project_total_variance_grid)\n        3    0.008    0.003    1.104    0.368 apply.py:1070(apply_series_generator)\n    14391    0.076    0.000    1.067    0.000 data_cleaner.py:245(_implied_volatility)\n     1627    0.002    0.000    0.997    0.001 data_cleaner.py:885(<lambda>)\n     1627    0.074    0.000    0.994    0.001 data_cleaner.py:547(_resolve_row_iv)\n    14171    0.029    0.000    0.942    0.000 _zeros_py.py:724(brentq)\n    14171    0.084    0.000    0.899    0.000 {built-in method scipy.optimize._zeros._brentq}\n   202485    0.348    0.000    0.815    0.000 _zeros_py.py:106(f_raise)\n      112    0.034    0.000    0.809    0.007 visualizer.py:183(_project_call_price_slice)\n      112    0.005    0.000    0.707    0.006 _minimize.py:54(minimize)\n     5280    0.029    0.000    0.632    0.000 generic.py:6258(__finalize__)\n      112    0.017    0.000    0.627    0.006 _slsqp_py.py:220(_minimize_slsqp)\n643950/1460    0.220    0.000    0.588    0.000 copy.py:110(deepcopy)\n89707/1456    0.185    0.000    0.584    0.000 copy.py:198(_deepcopy_dict)\n5906/5810    0.037    0.000    0.546    0.000 copy.py:172(_deepcopy_list)\n   202485    0.089    0.000    0.468    0.000 data_cleaner.py:279(objective)\n      781    0.461    0.001    0.461    0.001 {built-in method scipy.optimize._slsqplib.slsqp}\n        1    0.000    0.000    0.454    0.454 visualizer.py:433(_build_surface_nodes)\n     16/8    0.000    0.000    0.424    0.053 generic.py:232(aggregate)\n        1    0.000    0.000    0.414    0.414 generic.py:318(_python_agg_general)\n        1    0.000    0.000    0.414    0.414 ops.py:849(agg_series)\n        1    0.006    0.006    0.414    0.414 ops.py:882(_aggregate_series_pure_python)\n3701/2072    0.035    0.000    0.381    0.000 series.py:392(__init__)\n   202485    0.154    0.000    0.379    0.000 data_cleaner.py:70(_black_scholes_price_from_terms)\n      860    0.002    0.000    0.377    0.000 ops.py:1158(__iter__)\n      826    0.002    0.000    0.363    0.000 ops.py:1180(_chop)\n     1629    0.008    0.000    0.299    0.000 series.py:610(_init_dict)\n\n\n"
+}
