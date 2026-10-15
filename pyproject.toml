@@ -1,0 +1,3 @@
+[tool.vercel.scripts]
+# Vercel's Python builder supplies uv and the target Python virtual environment.
+vercel-install = "python vercel_install.py"

@@ -102,6 +102,9 @@ Raw evidence: [original baseline](evidence/cpp-baseline.json),
 | Complete suite, C++ forced | 172 passed | [C++ output](evidence/cpp-tests-windows.txt) |
 | Complete suite, Python forced | 172 passed | [Python output](evidence/cpp-python-tests-windows.txt) |
 | Complete suite, extension physically absent, auto selected | 155 passed, 17 native cases skipped | [fallback output](evidence/cpp-fallback-tests-windows.txt) |
+| Complete suite after six historical-comparison regression cases, C++ forced | 178 passed | [comparison-fix output](evidence/cpp-comparison-tests-windows.txt) |
+| Comparison compatibility and strict-policy checks, Python forced | 7 passed | [focused output](evidence/cpp-comparison-python-windows.txt) |
+| Comparison checks with extension physically absent, auto selected | 5 passed, 2 native cases skipped | [focused fallback output](evidence/cpp-comparison-fallback-windows.txt) |
 
 All full Python suites retain four existing NumPy timedelta deprecation warnings.
 [Release build output](evidence/cpp-build-windows.txt) records the local build.
@@ -134,16 +137,39 @@ fixtures; no AWS resources were modified.
 
 ## Portability, deployment and limits
 
-Local execution covers Windows x64/CPython 3.14/MSVC. The GitHub Actions matrix
-prepares Windows/Linux builds and tests on Python 3.12/3.14, plus a Linux job
-without the extension. **Those remote jobs were not run or pushed during this
-work. Linux execution and hosted-runner results are pending.** Native import is
-required before the CI native suites to prevent misleading skips.
+The [hosted CI run](https://github.com/Parsa-Bagheri/vol-surface-explorer/actions/runs/38815460057)
+at `fa6f810` passed all five jobs: Release CTest plus **178 tests with C++ forced
+and 178 with Python forced** on each Windows/Linux and Python 3.12/3.14 combination;
+extension-free Linux passed **159 tests with 19 native cases skipped**. Compilers
+were GNU 13.3 and MSVC 19.51. Native import is required before native suites to
+prevent misleading skips. [Compact hosted evidence](evidence/cpp-ci-cross-platform.json)
+records exact interpreter versions, job links and output. The first fresh-runner
+attempt revealed a missing parent for pytest's explicit temporary directory;
+the workflow now creates it before testing. No assertions changed. The workflow
+also tests the optional web install hook in both compiler-free and native modes;
+the PR's current checks record that additional job's result.
 
-Python remains the optional-dependency fallback. A future native deployment must
-build for the target OS, architecture and Python ABI, and restart Python after
-rebuilding. A binary replacement changes processing identity and can require
-explicit reprocessing. No production deployment or AWS operation was performed.
+The protected C++ website preview (`dpl_ArZv4Xp5r1tAmCoA3f9iGK7HBhCt`) built the
+same native source in Release with GNU 11.5 and Python 3.12.15, passed CTest and
+24 bounded HTTP checks, including a live SPY surface and all 18 byte-identical
+history downloads. Its live diagnostics explicitly reported `cpp`. This was an
+engineering preview of the local packaging hook; final release source and
+production checks are recorded in [PR #5](https://github.com/Parsa-Bagheri/vol-surface-explorer/pull/5).
+The optional build flag compiles on Vercel for its own Linux/Python ABI, then removes
+build tools. `VOL_BUILD_NATIVE=0` retains the compiler-free Python installation.
+See the guide for staged deployment and selected-backend verification commands.
+
+After renewing the operator's existing AWS session, bounded **read-only** checks
+verified both existing S3 archives, the release commit, both Glue partitions,
+both analytics projection checksums and **all 18 archive files byte-for-byte
+against the web bundle**. The previous Athena execution's status was checked;
+SQL was not rerun and no new query was started. [Redacted AWS evidence](evidence/cpp-aws-readonly.json)
+contains counts, without account/resource identifiers. The web history reader
+uses that same bundle without AWS credentials; deployment HTTP checks separately
+verify the website returns its exact bytes. No AWS resources were modified.
+
+Python remains the optional-dependency fallback. A binary replacement changes
+processing identity and can require explicit reprocessing.
 The European BSM model, quote policy and existing finite-grid arbitrage optimizer
 retain their original assumptions. Benchmarks cover one saved SPY chain and its
 subsets; they do not establish performance on every instrument or machine.

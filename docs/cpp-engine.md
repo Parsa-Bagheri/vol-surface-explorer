@@ -1,8 +1,8 @@
 # Optional C++ numerical engine
 
 The feature branch is `cpp-numerical-engine`, based on main commit
-`34ecc60`. The main checkout was clean before work. No production deployment,
-market-data collection, remote CI run or AWS operation was performed.
+`34ecc60`. The main checkout was clean before work. Fresh baseline evidence was
+recorded before implementation. Release checks are recorded in the results guide.
 
 ## Boundary and implementation
 
@@ -167,10 +167,32 @@ binary can require explicit reprocessing even if source is equivalent.
 Native packages stay outside runtime requirements. `.gitignore` and
 `.vercelignore` exclude generated native libraries/build output, so a Windows
 binary cannot accidentally become a Linux deployment dependency. Production
-continues through Python unless a compatible extension is deliberately installed;
-`VOL_NUMERICAL_BACKEND=python` explicitly pins it. A future native deployment
-needs a release build for its OS, architecture and Python ABI. No deployment or
-AWS resource change is part of this feature.
+uses Python unless a compatible extension is deliberately installed;
+`VOL_NUMERICAL_BACKEND=python` explicitly pins it.
+
+The optional Vercel install hook (`pyproject.toml` and `vercel_install.py`) installs
+the unchanged runtime requirements using the builder's target Python. By default,
+`VOL_BUILD_NATIVE=0` needs no compiler. Build-time `VOL_BUILD_NATIVE=1` additionally
+builds the native extension in Release for that Linux/Python ABI, runs CTest and
+requires a successful native import. Build failures stop deployment. Temporary
+build output and build tools are removed before function packaging. Locally
+generated Windows libraries stay excluded from uploads; only the Linux library
+generated on the builder is included. Normal pip installation is unchanged.
+
+After verifying the linked Vercel project and scope, stage a production build with:
+
+```text
+vercel deploy --prod --skip-domain --build-env VOL_BUILD_NATIVE=1 --env VOL_NUMERICAL_BACKEND=cpp
+python scripts/verify_deployed_history.py DEPLOYMENT_URL --vercel-cli INSTALLED_VERCEL_CLI_JS --scope YOUR_SCOPE --output demo-output/native-stage.json --include-live --expected-backend cpp
+vercel promote DEPLOYMENT_URL
+```
+
+Use authenticated `vercel curl` through the verifier for protected deployment
+URLs. Promote only after checks and required CI pass. Future native deployments
+must retain the build flag; a Python-only deployment can set it to `0` and select
+`python` or `auto`. The existing large-functions setting remains necessary for
+the pinned scientific runtime. No AWS resource changes are needed: the website
+reads the existing verified AWS-origin bundle without cloud credentials.
 
 ## Verification and measurement
 
@@ -214,5 +236,6 @@ GitHub Actions in `.github/workflows/numerical-engine.yml` prepares Release
 builds, CTest and both forced-backend full suites on Windows/Linux with Python
 3.12/3.14, plus an extension-free auto-fallback Linux job. The native jobs assert
 that import succeeds before pytest, so a missing extension cannot turn native
-coverage into a misleading successful skip. Prepared CI is not evidence of a
-successful remote run.
+coverage into a misleading successful skip. The additional web-install job checks
+both modes of the deployment hook. The results guide links actual successful
+Windows/Linux runs and distinguishes them from the workstation benchmarks.

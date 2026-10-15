@@ -1,0 +1,13 @@
+........................................................................ [ 40%]
+........................................................................ [ 80%]
+..................................                                       [100%]
+============================== warnings summary ===============================
+tests/test_time_utils.py::test_zero_day_contract_uses_positive_fractional_time_until_close[2026-09-28-2026-09-28T19:00:00Z]
+tests/test_time_utils.py::test_zero_day_contract_uses_positive_fractional_time_until_close[2026-09-28-2026-09-28T19:00:00Z]
+tests/test_time_utils.py::test_zero_day_contract_uses_positive_fractional_time_until_close[2026-12-14-2026-12-14T20:00:00Z]
+tests/test_time_utils.py::test_zero_day_contract_uses_positive_fractional_time_until_close[2026-12-14-2026-12-14T20:00:00Z]
+  C:\Users\maxim\vol-surface-explorer\tests\test_time_utils.py:73: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`). Please use a specific unit instead.
+    for delay in [pd.Timedelta(hours=1), pd.Timedelta(hours=2)]:
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+178 passed, 4 warnings in 133.51s (0:02:13)
