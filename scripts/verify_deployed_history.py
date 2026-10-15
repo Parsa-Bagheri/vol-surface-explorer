@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -15,7 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.history_reader import ReadOnlySnapshotStore
 
 
-def verify_deployment(url, bundle, output, vercel_cli=None, node="node", scope=None, include_live=False):
+def verify_deployment(url, bundle, output, vercel_cli=None, node="node", scope=None, include_live=False,
+                      expected_backend=None):
+    if expected_backend and not include_live:
+        raise ValueError("Backend verification requires include_live=True")
     store = ReadOnlySnapshotStore(bundle)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -68,6 +72,9 @@ def verify_deployment(url, bundle, output, vercel_cli=None, node="node", scope=N
                     assert "supported comparison points" in text and text.count("Plotly.newPlot") == 3
                 elif kind == "live":
                     assert "Plotly.newPlot" in text and "Contracts fetched" in text and "Contracts used" in text
+                    if expected_backend:
+                        backend = re.search(r"Numerical backend:\s*<strong>(python|cpp)</strong>", text)
+                        assert backend and backend.group(1) == expected_backend, "Unexpected live numerical backend"
                 if kind in {"catalog", "observation", "comparison", "live"}:
                     assert "cache-control: no-store" in headers
             return {"path": path, "kind": kind, "passed": True, "sha256": hashlib.sha256(body).hexdigest()}
@@ -76,7 +83,8 @@ def verify_deployment(url, bundle, output, vercel_cli=None, node="node", scope=N
     with ThreadPoolExecutor(max_workers=3) as executor:
         results = list(executor.map(check, checks))
     report = {"url": url, "verified": True, "checks": results,
-              "downloads": sum(c["kind"] == "download" for c in results), "live_checked": include_live}
+              "downloads": sum(c["kind"] == "download" for c in results), "live_checked": include_live,
+              "verified_live_backend": expected_backend}
     output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
 
@@ -90,8 +98,11 @@ def main():
     parser.add_argument("--node", default="node")
     parser.add_argument("--scope")
     parser.add_argument("--include-live", action="store_true")
+    parser.add_argument("--expected-backend", choices=("python", "cpp"),
+                        help="Require this backend in the live surface diagnostics (also use --include-live)")
     args = parser.parse_args()
-    report = verify_deployment(args.url, args.bundle, args.output, args.vercel_cli, args.node, args.scope, args.include_live)
+    report = verify_deployment(args.url, args.bundle, args.output, args.vercel_cli, args.node, args.scope,
+                               args.include_live, args.expected_backend)
     print(json.dumps({"verified": report["verified"], "checks": len(report["checks"]), "downloads": report["downloads"]}))
 
 

@@ -123,6 +123,9 @@
           </summary>
 
           <div class="advanced-content">
+            {% if diagnostics.get('numerical_engine') %}
+              <p>Numerical backend: <strong>{{ diagnostics.numerical_engine.backend }}</strong></p>
+            {% endif %}
             {% if advanced_cards %}
               <section class="advanced-metrics" aria-label="Advanced metrics">
                 {% for card in advanced_cards %}

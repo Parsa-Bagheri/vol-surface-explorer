@@ -24,3 +24,4 @@ class SurfaceRequest:
     quality_mode: str = "lenient"
     max_trade_age_hours: float = 120.0
     include_low_confidence: bool = False
+    numerical_backend: str | None = None

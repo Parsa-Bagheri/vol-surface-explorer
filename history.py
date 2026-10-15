@@ -30,6 +30,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("snapshot_id")
         if name == "replay":
             command.add_argument("--processing-id")
+        if name == "process":
+            command.add_argument("--backend", choices=["python", "cpp", "auto"], default=None)
     query = commands.add_parser("query", help="Local DuckDB SQL over integrity-validated Parquet")
     query.add_argument("sql")
     compare = commands.add_parser("compare")
@@ -76,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "inspect":
             result = {"observation": store.load(args.snapshot_id)[0], **store.publication_status()}
         elif args.command == "process":
-            result = store.process(args.snapshot_id)
+            result = store.process(args.snapshot_id, backend=args.backend)
         elif args.command == "replay":
             result = store.replay(args.snapshot_id, args.processing_id)
         elif args.command == "query":

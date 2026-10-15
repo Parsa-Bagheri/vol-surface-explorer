@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Any, Dict
 
@@ -16,6 +16,7 @@ from src.time_utils import normalize_as_of_utc
 from src.visualizer import create_vol_surface, select_surface_quotes
 from src.ticker_validation import validate_ticker_symbol
 from src.contract_outcomes import build_contract_outcomes
+from src.numerical_engine import numerical_session, resolve_backend
 from src.surface_config import (
     MAX_DTE,
     MAX_MAX_TRADE_AGE_HOURS,
@@ -50,6 +51,8 @@ def _finite_float(name: str, value: float) -> float:
 
 def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
     ticker = validate_ticker_symbol(request.ticker)
+    if request.numerical_backend not in {None, "python", "cpp", "auto"}:
+        raise ValueError("numerical_backend must be python, cpp or auto")
 
     strike_min_pct = _finite_float("strike_min_pct", request.strike_min_pct)
     strike_max_pct = _finite_float("strike_max_pct", request.strike_max_pct)
@@ -102,11 +105,13 @@ def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
         quality_mode=quality_mode,
         max_trade_age_hours=max_trade_age_hours,
         include_low_confidence=bool(request.include_low_confidence),
+        numerical_backend=request.numerical_backend,
     )
 
 
 def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
     validated_request = _validated_request(request)
+    validated_request = replace(validated_request, numerical_backend=resolve_backend(request.numerical_backend))
     valuation_time_utc = normalize_as_of_utc()
 
     current_price = get_current_price(validated_request.ticker)
@@ -130,6 +135,19 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
 
 
 def process_surface_inputs(
+    request: SurfaceRequest,
+    raw_options_df: pd.DataFrame,
+    current_price: float,
+    valuation_time_utc: pd.Timestamp,
+) -> SurfaceBuildResult:
+    """Build offline from explicit inputs, using one request-scoped backend."""
+    with numerical_session(request.numerical_backend) as engine:
+        result = _process_surface_inputs(replace(request, numerical_backend=engine.backend), raw_options_df, current_price, valuation_time_utc)
+        result.diagnostics["numerical_engine"] = engine.diagnostics()
+        return result
+
+
+def _process_surface_inputs(
     request: SurfaceRequest,
     raw_options_df: pd.DataFrame,
     current_price: float,
@@ -166,6 +184,7 @@ def process_surface_inputs(
         quality_mode=validated_request.quality_mode,
         max_trade_age_hours=validated_request.max_trade_age_hours,
         as_of_utc=valuation_time_utc,
+        numerical_backend=validated_request.numerical_backend,
     )
 
     if cleaned_options_df.empty:
@@ -198,6 +217,7 @@ def process_surface_inputs(
         "smooth": bool(validated_request.smooth),
         "include_low_confidence": bool(validated_request.include_low_confidence),
         "valuation_time_utc": valuation_time_utc.isoformat(),
+        "numerical_backend": validated_request.numerical_backend,
     }
     diagnostics["fetch"] = raw_options_df.attrs.get("fetchDiagnostics", {})
     diagnostics["contract_outcomes"] = build_contract_outcomes(

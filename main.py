@@ -233,6 +233,8 @@ def main():
         help="Include low-confidence rows in visualization output.",
     )
 
+    parser.add_argument("--backend", choices=["python", "cpp", "auto"], default=None,
+                        help="Numerical backend (default: VOL_NUMERICAL_BACKEND or auto).")
     args = parser.parse_args()
 
     print(f"Processing ticker: {args.ticker}")
@@ -251,6 +253,7 @@ def main():
                 quality_mode=args.quality_mode,
                 max_trade_age_hours=args.max_trade_age_hours,
                 include_low_confidence=args.include_low_confidence,
+                numerical_backend=args.backend,
             )
         )
     except ValueError as error:
@@ -270,6 +273,7 @@ def main():
     )
     print(f"DTE range: {args.dte_min} to {args.dte_max} days")
     print("IV calculation: Black-Scholes-Merton quote inversion")
+    print(f"Numerical backend: {diagnostics.get('numerical_engine', {}).get('backend', 'unknown')}")
     print(f"Quality mode: {args.quality_mode}")
     print("Surface construction: unified call/put static-arbitrage-adjusted surface")
     print(f"Fetched {len(raw_options_df)} raw option contracts initially.")

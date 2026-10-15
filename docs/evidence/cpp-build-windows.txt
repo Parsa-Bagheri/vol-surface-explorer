@@ -1,0 +1,23 @@
+CMake is re-running because C:/Users/maxim/vol-surface-explorer/build/native-release/CMakeFiles/generate.stamp is out-of-date.
+  the file 'C:/Users/maxim/vol-surface-explorer/native/CMakeLists.txt'
+  is newer than 'C:/Users/maxim/vol-surface-explorer/build/native-release/CMakeFiles/generate.stamp.depend'
+  result='-1'
+-- Selecting Windows SDK version 10.0.26100.0 to target Windows 10.0.22631.
+-- Found pybind11: C:/Users/maxim/vol-surface-explorer/.venv/Lib/site-packages/pybind11/include (found version "3.1.0")
+-- Configuring done (0.3s)
+-- Generating done (0.2s)
+-- Build files have been written to: C:/Users/maxim/vol-surface-explorer/build/native-release
+MSBuild version 17.14.14+a129329f1 for .NET Framework
+
+  1>Checking Build System
+  Building Custom Rule C:/Users/maxim/vol-surface-explorer/native/CMakeLists.txt
+  vol_engine.vcxproj -> C:\Users\maxim\vol-surface-explorer\build\native-release\Release\vol_engine.lib
+  Building Custom Rule C:/Users/maxim/vol-surface-explorer/native/CMakeLists.txt
+  bindings.cpp
+     Creating library C:/Users/maxim/vol-surface-explorer/build/native-release/Release/_vol_native.lib and object C:/Users/maxim/vol-surface-explorer/build/native-release/Release/_vol_native.exp
+  Generating code
+  Finished generating code
+  _vol_native.vcxproj -> C:\Users\maxim\vol-surface-explorer\src\_vol_native.cp314-win_amd64.pyd
+  Building Custom Rule C:/Users/maxim/vol-surface-explorer/native/CMakeLists.txt
+  vol_engine_tests.vcxproj -> C:\Users\maxim\vol-surface-explorer\build\native-release\Release\vol_engine_tests.exe
+  Building Custom Rule C:/Users/maxim/vol-surface-explorer/native/CMakeLists.txt

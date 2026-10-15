@@ -1,0 +1,163 @@
+{
+  "snapshot_id": "6e471b7a5c5d8fe0695afacb",
+  "source_kind": "collected",
+  "raw_sha256": "c71bc9f90901974be3e73a306c1b7570cdfdd1c4a6fc45de910865dd33324a6b",
+  "valuation_time_utc": "2026-10-14T02:45:43.381473+00:00",
+  "parameters": {
+    "dividend_yield": 0.0,
+    "dte_max": 30,
+    "dte_min": 1,
+    "include_low_confidence": false,
+    "max_trade_age_hours": 120.0,
+    "quality_mode": "lenient",
+    "risk_free_rate": 0.02,
+    "smooth": true,
+    "strike_max_pct": 1.07,
+    "strike_min_pct": 0.93,
+    "ticker": "SPY"
+  },
+  "backend": "cpp",
+  "repeats": 7,
+  "calculation_input_sha256": "aa333417a2061eb6b97738a8079e1fbf5e37c70a5a69d17f98c799014843795c",
+  "selected_engine": {
+    "backend": "cpp",
+    "engine_version": "bsm-brent-v1",
+    "source_sha256": "3c75ebb82cdf393dad15d4c9aa075bb5042695d148425c27924516564c8fc95b",
+    "binary_sha256": "698d156ff34e2856d309100d2c672ce9ae2a28d3afb1200a03936ebf514667f8",
+    "compiler": "MSVC 19.44.35211.0",
+    "build_type": "Release",
+    "batch_calls": 227,
+    "contracts_evaluated": 25419,
+    "max_solver_iterations": 22,
+    "status_counts": {
+      "invalid_input": 3,
+      "ok": 24955,
+      "outside_bounds": 420,
+      "zero_volatility": 41
+    }
+  },
+  "environment": {
+    "os": "Windows-11-10.0.22631-SP0",
+    "python": "3.14.7 (tags/v3.14.7:823f032, Aug  5 2026, 10:51:32) [MSC v.1944 64 bit (AMD64)]",
+    "machine": "AMD64",
+    "processor": "AMD64 Family 25 Model 117 Stepping 2, AuthenticAMD",
+    "logical_cpus": 12,
+    "dependencies": {
+      "numpy": "2.5.4",
+      "scipy": "1.18.1",
+      "pandas": "2.3.3",
+      "plotly": "6.9.0",
+      "pyarrow": "26.0.0"
+    }
+  },
+  "calculation": [
+    {
+      "contracts": 128,
+      "median_s": 0.0008721000049263239,
+      "min_s": 0.0007369999948423356,
+      "max_s": 0.0010910999844782054,
+      "mad_s": 0.0001351000100839883,
+      "samples_s": [
+        0.0007621999830007553,
+        0.0007369999948423356,
+        0.0010910999844782054,
+        0.0010908000112976879,
+        0.0008721000049263239,
+        0.0007790000236127526,
+        0.0010476999741513282
+      ]
+    },
+    {
+      "contracts": 512,
+      "median_s": 0.0025495000008959323,
+      "min_s": 0.002424800011795014,
+      "max_s": 0.0028386999911163002,
+      "mad_s": 5.880001117475331e-05,
+      "samples_s": [
+        0.0026083000120706856,
+        0.0028386999911163002,
+        0.002424800011795014,
+        0.0025451999972574413,
+        0.0025495000008959323,
+        0.002441799995722249,
+        0.0025836999993771315
+      ]
+    },
+    {
+      "contracts": 1627,
+      "median_s": 0.007657499983906746,
+      "min_s": 0.007267999986652285,
+      "max_s": 0.008484300022246316,
+      "mad_s": 0.00038949999725446105,
+      "samples_s": [
+        0.0074720999982673675,
+        0.007657499983906746,
+        0.008452100009890273,
+        0.008484300022246316,
+        0.008112000010441989,
+        0.007267999986652285,
+        0.007398999994620681
+      ]
+    }
+  ],
+  "surface": [
+    {
+      "raw_contracts": 256,
+      "median_s": 0.8148882999958005,
+      "min_s": 0.7198684999893885,
+      "max_s": 0.8205650000018068,
+      "mad_s": 0.0056767000060062855,
+      "samples_s": [
+        0.7198684999893885,
+        0.8174795999948401,
+        0.8205650000018068,
+        0.8173493999929633,
+        0.8148882999958005,
+        0.7675957000174094,
+        0.7725171999773011
+      ]
+    },
+    {
+      "raw_contracts": 1024,
+      "median_s": 0.9485348000016529,
+      "min_s": 0.8960759000037797,
+      "max_s": 1.063246200006688,
+      "mad_s": 0.029068299976643175,
+      "samples_s": [
+        0.8960759000037797,
+        0.9338314999768045,
+        0.9485348000016529,
+        0.9301880999992136,
+        0.9776030999782961,
+        0.9973148999852128,
+        1.063246200006688
+      ]
+    },
+    {
+      "raw_contracts": 2604,
+      "median_s": 1.466209699981846,
+      "min_s": 1.2486691999947652,
+      "max_s": 1.5690352999954484,
+      "mad_s": 0.04162460000952706,
+      "samples_s": [
+        1.4506796000059694,
+        1.4773448999912944,
+        1.507834299991373,
+        1.377138499985449,
+        1.2486691999947652,
+        1.466209699981846,
+        1.5690352999954484
+      ]
+    }
+  ],
+  "scope": "Warm computation including array conversion/bindings and Plotly figure construction; excludes file reads, network, browser rendering, startup and compilation. Subsets are deterministic samples of real saved quotes, not synthetic contracts.",
+  "native_build": {
+    "backend": "cpp",
+    "engine_version": "bsm-brent-v1",
+    "source_sha256": "3c75ebb82cdf393dad15d4c9aa075bb5042695d148425c27924516564c8fc95b",
+    "binary_sha256": "698d156ff34e2856d309100d2c672ce9ae2a28d3afb1200a03936ebf514667f8",
+    "compiler": "MSVC 19.44.35211.0",
+    "build_type": "Release"
+  },
+  "profile": "         3520674 function calls (2742812 primitive calls) in 3.156 seconds\n\n   Ordered by: cumulative time\n   List reduced from 1847 to 35 due to restriction <35>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        1    0.000    0.000    3.156    3.156 benchmark_numerics.py:61(build)\n        1    0.000    0.000    3.156    3.156 surface_service.py:137(process_surface_inputs)\n        1    0.002    0.002    3.155    3.155 surface_service.py:150(_process_surface_inputs)\n        1    0.000    0.000    1.509    1.509 visualizer.py:736(create_vol_surface)\n        1    0.007    0.007    1.453    1.453 visualizer.py:488(_build_arbitrage_free_surface)\n        1    0.004    0.004    1.435    1.435 data_cleaner.py:793(prepare_options_data)\n        3    0.000    0.000    0.865    0.288 frame.py:10197(apply)\n        3    0.003    0.001    0.864    0.288 apply.py:864(apply)\n        3    0.000    0.000    0.861    0.287 apply.py:1061(apply_standard)\n      112    0.035    0.000    0.809    0.007 visualizer.py:182(_project_call_price_slice)\n      112    0.005    0.000    0.713    0.006 _minimize.py:54(minimize)\n     5293    0.035    0.000    0.706    0.000 generic.py:6258(__finalize__)\n        3    0.009    0.003    0.689    0.230 apply.py:1070(apply_series_generator)\n649735/1473    0.240    0.000    0.653    0.000 copy.py:110(deepcopy)\n90513/1469    0.212    0.000    0.648    0.000 copy.py:198(_deepcopy_dict)\n      112    0.016    0.000    0.638    0.006 _slsqp_py.py:220(_minimize_slsqp)\n5958/5862    0.042    0.000    0.606    0.000 copy.py:172(_deepcopy_list)\n     1627    0.004    0.000    0.569    0.000 data_cleaner.py:921(<lambda>)\n     1627    0.075    0.000    0.561    0.000 data_cleaner.py:547(_resolve_row_iv)\n        2    0.006    0.003    0.534    0.267 visualizer.py:263(_project_total_variance_grid)\n        1    0.000    0.000    0.494    0.494 visualizer.py:421(_build_surface_nodes)\n      778    0.463    0.001    0.463    0.001 {built-in method scipy.optimize._slsqplib.slsqp}\n     16/8    0.000    0.000    0.459    0.057 generic.py:232(aggregate)\n        1    0.000    0.000    0.446    0.446 generic.py:318(_python_agg_general)\n        1    0.000    0.000    0.446    0.446 ops.py:849(agg_series)\n        1    0.007    0.007    0.446    0.446 ops.py:882(_aggregate_series_pure_python)\n3705/2076    0.038    0.000    0.414    0.000 series.py:392(__init__)\n      860    0.002    0.000    0.400    0.000 ops.py:1158(__iter__)\n        1    0.006    0.006    0.386    0.386 data_cleaner.py:463(_estimate_forward_terms)\n      826    0.002    0.000    0.380    0.000 ops.py:1180(_chop)\n     1629    0.008    0.000    0.317    0.000 series.py:610(_init_dict)\n      610    0.006    0.000    0.274    0.000 frame.py:4073(__getitem__)\n        3    0.000    0.000    0.171    0.057 apply.py:1102(wrap_results)\n     3973    0.031    0.000    0.171    0.000 construction.py:517(sanitize_array)\n       11    0.000    0.000    0.171    0.016 frame.py:698(__init__)\n\n\n"
+}

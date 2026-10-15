@@ -1,0 +1,7 @@
+Test project C:/Users/maxim/vol-surface-explorer/build/native-release
+    Start 1: vol_engine_tests
+1/1 Test #1: vol_engine_tests .................   Passed    0.01 sec
+
+100% tests passed out of 1
+
+Total Test time (real) =   0.02 sec

@@ -70,13 +70,21 @@ def _evaluate(x: np.ndarray, y: np.ndarray, z: np.ndarray, strike: float, dte: f
     return values[0] + weight * (values[1] - values[0])
 
 
+def _comparison_parameters(parameters: dict) -> dict:
+    # A collection backend selector may be absent in legacy manifests or
+    # overridden during processing. Actual engine compatibility is enforced by
+    # processor equality; every model and quote-policy parameter still matters.
+    return {name: value for name, value in parameters.items() if name != "numerical_backend"}
+
+
 def compare_observations(store: LocalObservationStore, left_id: str, right_id: str,
                          left_processing: str, right_processing: str) -> dict:
     left = store.load(left_id)[0]
     right = store.load(right_id)[0]
     a = store.load_artifact(left_id, left_processing)
     b = store.load_artifact(right_id, right_processing)
-    if left["parameters"] != right["parameters"] or a["processor"] != b["processor"]:
+    if (_comparison_parameters(left["parameters"]) != _comparison_parameters(right["parameters"])
+            or a["processor"] != b["processor"]):
         raise ObservationError("Comparison requires the same ticker, saved parameters and processing code/dependencies. Reprocess explicitly to align versions.")
     kind_a, xa, ya, za = _grid(store.artifact_path(left_id, left_processing))
     kind_b, xb, yb, zb = _grid(store.artifact_path(right_id, right_processing))
