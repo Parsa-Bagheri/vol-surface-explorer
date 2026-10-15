@@ -1,6 +1,6 @@
 # Optional C++ numerical engine
 
-The feature branch is `codex/cpp-numerical-engine`, based on main commit
+The feature branch is `cpp-numerical-engine`, based on main commit
 `34ecc60`. The main checkout was clean before work. No production deployment,
 market-data collection, remote CI run or AWS operation was performed.
 
@@ -151,6 +151,12 @@ override the collection backend. Replay selects the **artifact's** backend even
 if the current environment requests another one, and refuses a missing or changed
 engine. The original spot, valuation time, quote policy and raw lineage remain
 unchanged. Reading/downloads of saved C++ artifacts do not need the extension.
+
+Comparison ignores the saved backend selector and requires equal actual
+processing identities plus all model and quote-policy settings. This lets a
+legacy observation without a selector compare with a newer observation after
+both are reprocessed by the same engine, including an explicit backend override.
+The saved parameters and immutable manifests are not rewritten.
 
 The older committed history bundle remains readable; replaying old processing
 requires its original code/dependencies, or an explicit reprocess under this

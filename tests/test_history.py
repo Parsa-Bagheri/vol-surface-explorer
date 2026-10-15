@@ -1,5 +1,7 @@
 import json
+from dataclasses import replace
 from pathlib import Path
+import shutil
 import socket
 
 import numpy as np
@@ -275,6 +277,59 @@ def test_compare_rejects_incompatible_method_parameters(tmp_path):
     a, b = store.process("a"), store.process("b")
     with pytest.raises(ObservationError, match="same ticker, saved parameters"):
         compare_observations(store, "a", "b", a["processing_id"], b["processing_id"])
+
+
+@pytest.mark.parametrize("selector", [None, "python"])
+def test_compare_legacy_and_current_observations_after_reprocessing(tmp_path, selector):
+    source = LocalObservationStore(Path(__file__).parents[1] / "history_bundle")
+    snapshot_id = "6e471b7a5c5d8fe0695afacb"
+    source_path = source.observation_path(snapshot_id)
+    store = LocalObservationStore(tmp_path)
+    legacy_path = store.root / source_path.relative_to(source.root)
+    shutil.copytree(source_path, legacy_path)
+    observation, raw = store.load(snapshot_id)
+    assert "numerical_backend" not in observation["parameters"]
+    request = replace(SurfaceRequest(**observation["parameters"]), numerical_backend=selector)
+    current = store.save(request, raw, observation["spot"], observation["valuation_time_utc"],
+                         source_kind=observation["source_kind"], snapshot_id="current")
+    current_path = store.observation_path("current") / "manifest.json"
+    original_manifests = ((legacy_path / "manifest.json").read_bytes(), current_path.read_bytes())
+    assert observation["parameters"] != current["parameters"]
+    a, b = store.process(snapshot_id, backend="python"), store.process("current", backend="python")
+    assert a["processor"] == b["processor"]
+    comparison = compare_observations(store, snapshot_id, "current", a["processing_id"], b["processing_id"])
+    assert comparison["supported_points"] > 0
+    assert comparison["mean_change_vol_points"] == pytest.approx(0., abs=1e-10)
+    assert "numerical_backend" not in comparison["left"]["parameters"]
+    assert comparison["right"]["parameters"]["numerical_backend"] == selector
+    assert ((legacy_path / "manifest.json").read_bytes(), current_path.read_bytes()) == original_manifests
+
+
+@pytest.mark.parametrize("selectors", [(None, "auto"), ("python", "auto"), ("cpp", "python")])
+def test_compare_different_backend_selectors_with_same_processing_override(tmp_path, selectors):
+    if "cpp" in selectors:
+        pytest.importorskip("src._vol_native")
+    store = LocalObservationStore(tmp_path)
+    left = save(store, snapshot_id="a", request=replace(REQUEST, numerical_backend=selectors[0]))
+    right = save(store, snapshot_id="b", request=replace(REQUEST, numerical_backend=selectors[1]))
+    a, b = store.process("a", backend="python"), store.process("b", backend="python")
+    assert left["parameters"] != right["parameters"]
+    assert a["processor"] == b["processor"]
+    comparison = compare_observations(store, "a", "b", a["processing_id"], b["processing_id"])
+    assert comparison["supported_points"] > 0
+    assert comparison["mean_change_vol_points"] == pytest.approx(0., abs=1e-10)
+
+
+def test_compare_rejects_different_actual_engines(tmp_path):
+    pytest.importorskip("src._vol_native")
+    store = LocalObservationStore(tmp_path)
+    save(store)
+    python = store.process("sample", backend="python")
+    cpp = store.process("sample", backend="cpp")
+    assert python["processor"]["numerical_engine"]["backend"] == "python"
+    assert cpp["processor"]["numerical_engine"]["backend"] == "cpp"
+    with pytest.raises(ObservationError, match="same ticker, saved parameters"):
+        compare_observations(store, "sample", "sample", python["processing_id"], cpp["processing_id"])
 
 
 def test_processing_artifact_corruption_and_lineage_are_rejected(tmp_path):
