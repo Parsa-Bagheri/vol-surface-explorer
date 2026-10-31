@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict
 
 from flask import Flask, g, render_template, request, send_file, url_for
 from datetime import datetime, timezone
+from src.plotly_assets import plotly_script_url
 from src.ticker_validation import validate_ticker_symbol as _validate_ticker_symbol
 from src.request_timing import install_request_timing, measure_phase, browser_timing_head, browser_timing_after_plot
 from src.surface_config import (
@@ -167,6 +168,7 @@ def create_app(
     runtime_preparer: Callable[[], None] = _prepare_surface_runtime,
 ) -> Flask:
     app = Flask(__name__)
+    plotly_js_url = plotly_script_url()
     install_request_timing(app)
     app.config["MAX_CONTENT_LENGTH"] = 1024
     configured_history = history_root or os.environ.get("VOL_HISTORY_ROOT")
@@ -236,7 +238,7 @@ def create_app(
                     plot_html = result.figure.to_html(
                         full_html=False,
                         post_script=browser_timing_after_plot(built_at),
-                        include_plotlyjs="cdn",
+                        include_plotlyjs=plotly_js_url,
                         default_width="100%",
                         default_height="100%",
                         config={"responsive": True, "displaylogo": False},
@@ -260,6 +262,7 @@ def create_app(
             "index.html",
             request_timing_script=browser_timing_head(),
             built_at=built_at,
+            plotly_js_url=plotly_js_url,
             fresh_url=url_for("index", **values, fresh="1"),
             values=values,
             min_dte=MIN_DTE,

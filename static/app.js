@@ -145,3 +145,13 @@ const setupRuntimePreparation = () => {
 };
 
 setupRuntimePreparation();
+
+
+// The form stays usable if the chart CDN is unavailable.
+const chartContainer = document.querySelector(".surface-card:not(.loading-surface-card) .plot-wrapper");
+if (chartContainer?.querySelector(".plotly-graph-div") && typeof window.Plotly === "undefined") {
+  const message = document.createElement("p");
+  message.setAttribute("role", "alert");
+  message.textContent = "The chart library could not load. Reload the page to try again.";
+  chartContainer.replaceChildren(message);
+}

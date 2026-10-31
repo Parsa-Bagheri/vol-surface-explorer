@@ -7,10 +7,18 @@ An explicitly requested native build fails the deployment if build/checks fail.
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+
+def write_plotly_manifest():
+    from plotly.offline import get_plotlyjs_version
+    path = Path(__file__).parent / "static" / "plotly-version.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": get_plotlyjs_version()}) + "\n", encoding="utf-8")
 
 
 def main():
@@ -23,6 +31,7 @@ def main():
 
     uv = ["uv", "pip"]
     run(*uv, "install", "--python", sys.executable, "-r", "requirements.txt")
+    write_plotly_manifest()
     if native == "0":
         print("Web installation: Python backend (native build disabled)", flush=True)
         return

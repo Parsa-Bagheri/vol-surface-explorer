@@ -331,3 +331,25 @@ def test_cacheable_responses_preserve_distinct_query_controls():
         assert (ticker + " surface").encode() in response.data
         assert f'dte_min={dte}'.encode() in response.data
         assert b"smooth=False" in response.data
+
+
+def test_homepage_preloads_exactly_the_chart_script():
+    import re
+    from src.plotly_assets import plotly_script_url
+    client = create_app(surface_builder=_build_result).test_client()
+    homepage = client.get("/").get_data(as_text=True)
+    chart = client.get("/?ticker=SPY").get_data(as_text=True)
+    url = plotly_script_url()
+    assert f'<link rel="preload" href="{url}" as="script">' in homepage
+    scripts = re.findall(r'<script[^>]+src="([^"]+)"', chart)
+    assert [script for script in scripts if "cdn.plot.ly" in script] == [url]
+
+
+def test_build_hook_updates_manifest_to_installed_plotly(tmp_path, monkeypatch):
+    import json
+    import vercel_install
+    from plotly.offline import get_plotlyjs_version
+    monkeypatch.setattr(vercel_install, "__file__", str(tmp_path / "vercel_install.py"))
+    vercel_install.write_plotly_manifest()
+    data = json.loads((tmp_path / "static/plotly-version.json").read_text())
+    assert data["version"] == get_plotlyjs_version()
