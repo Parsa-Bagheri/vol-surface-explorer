@@ -169,6 +169,9 @@ def _process_surface_inputs(
     raw_options_df = raw_options_df.copy()
     raw_options_df["contractId"] = range(len(raw_options_df))
     cleaning_input = raw_options_df.copy()
+    # Diagnostics remain on raw_options_df for reporting and saved observations.
+    # Pandas deep-copies attrs onto temporary rows/columns throughout cleaning.
+    cleaning_input.attrs = {}
     if "historyInvalidReason" in cleaning_input:
         cleaning_input.loc[cleaning_input["historyInvalidReason"].ne(""), "strike"] = float("nan")
     cleaned_options_df = prepare_options_data(
