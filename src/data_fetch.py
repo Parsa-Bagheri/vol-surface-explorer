@@ -7,6 +7,7 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from src.request_timing import measure_phase
 
 from src.time_utils import expiration_close_utc, expiration_dte, normalize_as_of_utc
 
@@ -265,7 +266,8 @@ def get_options_data(
     options_data_list = []
     fetch_diagnostics = []
     fetch_failures = {}
-    available_dates = stock.options # Get all available expiration dates
+    with measure_phase("expiry_discovery"):
+        available_dates = stock.options # Get all available expiration dates
     metadata = getattr(stock, "_expirations", None)
     expiration_metadata = dict(metadata) if isinstance(metadata, dict) else None
 

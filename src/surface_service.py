@@ -17,6 +17,7 @@ from src.visualizer import create_vol_surface, select_surface_quotes
 from src.ticker_validation import validate_ticker_symbol
 from src.contract_outcomes import build_contract_outcomes
 from src.numerical_engine import numerical_session, resolve_backend
+from src.request_timing import measure_phase
 from src.surface_config import (
     MAX_DTE,
     MAX_MAX_TRADE_AGE_HOURS,
@@ -111,10 +112,12 @@ def _validated_request(request: SurfaceRequest) -> SurfaceRequest:
 
 def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
     validated_request = _validated_request(request)
-    validated_request = replace(validated_request, numerical_backend=resolve_backend(request.numerical_backend))
+    with measure_phase("backend"):
+        validated_request = replace(validated_request, numerical_backend=resolve_backend(request.numerical_backend))
     valuation_time_utc = normalize_as_of_utc()
 
-    current_price = get_current_price(validated_request.ticker)
+    with measure_phase("spot"):
+        current_price = get_current_price(validated_request.ticker)
     if current_price is None:
         raise ValueError(
             f"Could not fetch the current price for {validated_request.ticker}."
@@ -123,15 +126,17 @@ def build_surface_bundle(request: SurfaceRequest) -> SurfaceBuildResult:
     min_strike_abs = current_price * validated_request.strike_min_pct
     max_strike_abs = current_price * validated_request.strike_max_pct
 
-    raw_options_df = get_options_data(
-        validated_request.ticker,
-        min_dte=validated_request.dte_min,
-        max_dte=validated_request.dte_max,
-        as_of_utc=valuation_time_utc,
-    )
-    return process_surface_inputs(
-        validated_request, raw_options_df, current_price, valuation_time_utc
-    )
+    with measure_phase("options"):
+        raw_options_df = get_options_data(
+            validated_request.ticker,
+            min_dte=validated_request.dte_min,
+            max_dte=validated_request.dte_max,
+            as_of_utc=valuation_time_utc,
+        )
+    with measure_phase("surface"):
+        return process_surface_inputs(
+            validated_request, raw_options_df, current_price, valuation_time_utc
+        )
 
 
 def process_surface_inputs(

@@ -242,3 +242,58 @@ def test_empty_homepage_does_not_import_the_financial_stack():
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_preparation_is_explicit_and_does_not_fetch_or_build_a_surface():
+    calls = []
+
+    def unexpected_builder(request):
+        pytest.fail("Preparing runtime must not fetch/build a surface")
+
+    app = create_app(surface_builder=unexpected_builder,
+                     runtime_preparer=lambda: calls.append("prepared"))
+    client = app.test_client()
+    assert client.get("/").status_code == 200
+    assert calls == []
+    assert client.get("/prepare-surface").status_code == 405
+    response = client.post("/prepare-surface")
+    assert response.status_code == 204
+    assert response.headers["Cache-Control"] == "no-store"
+    assert calls == ["prepared"]
+
+
+def test_runtime_preparation_is_once_per_worker_and_never_fetches(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import web_app
+    import src.data_fetch as data_fetch
+    import src.numerical_engine as numerical_engine
+
+    calls = []
+    monkeypatch.setattr(web_app, "_runtime_prepared", False)
+    monkeypatch.setattr(numerical_engine, "resolve_backend", lambda _: calls.append("backend") or "python")
+    def forbidden(*args, **kwargs):
+        pytest.fail("Runtime readiness must not access market data")
+    monkeypatch.setattr(data_fetch, "get_current_price", forbidden)
+    monkeypatch.setattr(data_fetch, "get_options_data", forbidden)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: web_app._prepare_surface_runtime(), range(8)))
+    assert calls == ["backend"]
+    assert web_app._runtime_prepared
+
+
+def test_vercel_entrypoint_prepares_before_serving(monkeypatch):
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    env = dict(os.environ, VOL_NUMERICAL_BACKEND="python", VOL_REQUEST_TIMING="1",
+               PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run([sys.executable, "-c",
+        "import api.index; import web_app; assert web_app._runtime_prepared"],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stderr
+    record = json.loads(result.stdout.split("VOLEXPLORER_TIMING ", 1)[1])
+    assert record["event"] == "runtime_ready"
+    assert record["preparation_ms"] > 0

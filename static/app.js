@@ -131,3 +131,17 @@ const setupLoadingState = () => {
 };
 
 setupLoadingState();
+
+const setupRuntimePreparation = () => {
+  const form = document.querySelector(".control-form");
+  if (!form) {
+    return;
+  }
+  // Start while the user enters the ticker/ranges; surface submission stays
+  // independent so a failed preparation request cannot block a build.
+  form.addEventListener("focusin", () => {
+    fetch("/prepare-surface", { method: "POST", cache: "no-store" }).catch(() => {});
+  }, { once: true });
+};
+
+setupRuntimePreparation();
