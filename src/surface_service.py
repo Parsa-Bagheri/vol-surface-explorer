@@ -179,21 +179,22 @@ def _process_surface_inputs(
     cleaning_input.attrs = {}
     if "historyInvalidReason" in cleaning_input:
         cleaning_input.loc[cleaning_input["historyInvalidReason"].ne(""), "strike"] = float("nan")
-    cleaned_options_df = prepare_options_data(
-        cleaning_input,
-        min_strike=min_strike_abs,
-        max_strike=max_strike_abs,
-        option_type_to_plot="both",
-        min_dte=validated_request.dte_min,
-        max_dte=validated_request.dte_max,
-        underlying_price=current_price,
-        risk_free_rate=validated_request.risk_free_rate,
-        dividend_yield=validated_request.dividend_yield,
-        quality_mode=validated_request.quality_mode,
-        max_trade_age_hours=validated_request.max_trade_age_hours,
-        as_of_utc=valuation_time_utc,
-        numerical_backend=validated_request.numerical_backend,
-    )
+    with measure_phase("cleaning"):
+        cleaned_options_df = prepare_options_data(
+            cleaning_input,
+            min_strike=min_strike_abs,
+            max_strike=max_strike_abs,
+            option_type_to_plot="both",
+            min_dte=validated_request.dte_min,
+            max_dte=validated_request.dte_max,
+            underlying_price=current_price,
+            risk_free_rate=validated_request.risk_free_rate,
+            dividend_yield=validated_request.dividend_yield,
+            quality_mode=validated_request.quality_mode,
+            max_trade_age_hours=validated_request.max_trade_age_hours,
+            as_of_utc=valuation_time_utc,
+            numerical_backend=validated_request.numerical_backend,
+        )
 
     if cleaned_options_df.empty:
         raise ValueError(
@@ -205,53 +206,56 @@ def _process_surface_inputs(
         surface_input = surface_input[
             surface_input["includeInSurface"].fillna(False).astype(bool)
         ]
-    selected_quotes = select_surface_quotes(
-        surface_input, current_price,
-        validated_request.risk_free_rate, validated_request.dividend_yield,
-    )
+    with measure_phase("selection"):
+        selected_quotes = select_surface_quotes(
+            surface_input, current_price,
+            validated_request.risk_free_rate, validated_request.dividend_yield,
+        )
 
-    diagnostics = build_diagnostics_report(
-        cleaned_options_df,
-        raw_row_count=len(raw_options_df),
-    )
-    diagnostics["request"] = {
-        "ticker": validated_request.ticker,
-        "strike_min_pct": validated_request.strike_min_pct,
-        "strike_max_pct": validated_request.strike_max_pct,
-        "dte_min": validated_request.dte_min,
-        "dte_max": validated_request.dte_max,
-        "quality_mode": validated_request.quality_mode,
-        "max_trade_age_hours": validated_request.max_trade_age_hours,
-        "smooth": bool(validated_request.smooth),
-        "include_low_confidence": bool(validated_request.include_low_confidence),
-        "valuation_time_utc": valuation_time_utc.isoformat(),
-        "numerical_backend": validated_request.numerical_backend,
-    }
-    diagnostics["fetch"] = raw_options_df.attrs.get("fetchDiagnostics", {})
-    diagnostics["contract_outcomes"] = build_contract_outcomes(
-        raw_options_df, cleaned_options_df, validated_request, current_price,
-        selected_quotes=selected_quotes,
-    )
-    diagnostics["internal_validation"] = build_internal_validation_report(
-        cleaned_options_df,
-        underlying_price=current_price,
-        risk_free_rate=validated_request.risk_free_rate,
-        dividend_yield=validated_request.dividend_yield,
-        dte_range=(validated_request.dte_min, validated_request.dte_max),
-    )
+    with measure_phase("diagnostics"):
+        diagnostics = build_diagnostics_report(
+            cleaned_options_df,
+            raw_row_count=len(raw_options_df),
+        )
+        diagnostics["request"] = {
+            "ticker": validated_request.ticker,
+            "strike_min_pct": validated_request.strike_min_pct,
+            "strike_max_pct": validated_request.strike_max_pct,
+            "dte_min": validated_request.dte_min,
+            "dte_max": validated_request.dte_max,
+            "quality_mode": validated_request.quality_mode,
+            "max_trade_age_hours": validated_request.max_trade_age_hours,
+            "smooth": bool(validated_request.smooth),
+            "include_low_confidence": bool(validated_request.include_low_confidence),
+            "valuation_time_utc": valuation_time_utc.isoformat(),
+            "numerical_backend": validated_request.numerical_backend,
+        }
+        diagnostics["fetch"] = raw_options_df.attrs.get("fetchDiagnostics", {})
+        diagnostics["contract_outcomes"] = build_contract_outcomes(
+            raw_options_df, cleaned_options_df, validated_request, current_price,
+            selected_quotes=selected_quotes,
+        )
+        diagnostics["internal_validation"] = build_internal_validation_report(
+            cleaned_options_df,
+            underlying_price=current_price,
+            risk_free_rate=validated_request.risk_free_rate,
+            dividend_yield=validated_request.dividend_yield,
+            dte_range=(validated_request.dte_min, validated_request.dte_max),
+        )
 
-    figure = create_vol_surface(
-        cleaned_options_df,
-        validated_request.ticker,
-        smooth=validated_request.smooth,
-        include_low_confidence=validated_request.include_low_confidence,
-        underlying_price=current_price,
-        risk_free_rate=validated_request.risk_free_rate,
-        dividend_yield=validated_request.dividend_yield,
-        strike_range=(min_strike_abs, max_strike_abs),
-        dte_range=(validated_request.dte_min, validated_request.dte_max),
-        selected_quotes=selected_quotes,
-    )
+    with measure_phase("figure"):
+        figure = create_vol_surface(
+            cleaned_options_df,
+            validated_request.ticker,
+            smooth=validated_request.smooth,
+            include_low_confidence=validated_request.include_low_confidence,
+            underlying_price=current_price,
+            risk_free_rate=validated_request.risk_free_rate,
+            dividend_yield=validated_request.dividend_yield,
+            strike_range=(min_strike_abs, max_strike_abs),
+            dte_range=(validated_request.dte_min, validated_request.dte_max),
+            selected_quotes=selected_quotes,
+        )
 
     return SurfaceBuildResult(
         request=validated_request,

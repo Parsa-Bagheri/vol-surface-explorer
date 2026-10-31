@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy.stats import norm
 
 from src.data_cleaner import (
@@ -575,3 +576,20 @@ def test_internal_validation_tolerates_missing_market_price_column():
     assert report["rows_checked"] == 1
     assert report["rows_with_market_price"] == 0
     assert report["repricing_mae"] is None
+
+
+@pytest.mark.parametrize("backend", ["python", "cpp"])
+def test_record_resolution_preserves_order_with_duplicate_input_indices(backend):
+    if backend == "cpp":
+        pytest.importorskip("src._vol_native")
+    now = datetime.now(timezone.utc)
+    raw = pd.DataFrame([
+        _base_row(strike=100, optionType="call", bid=4.8, ask=5.0),
+        _base_row(strike=100, optionType="put", bid=4.2, ask=4.4),
+        _base_row(strike=105, optionType="call", bid=2.9, ask=3.1),
+    ], index=[7, 7, 9])
+    kwargs = dict(underlying_price=100, as_of_utc=now, numerical_backend=backend)
+    expected = prepare_options_data(raw.reset_index(drop=True), **kwargs)
+    actual = prepare_options_data(raw, **kwargs)
+    assert len(actual) == 3
+    pd.testing.assert_frame_equal(actual, expected, check_exact=True)
