@@ -8,6 +8,7 @@ from src.surface_service import SurfaceRequest
 def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot(monkeypatch):
     captured = {}
     raw_df = pd.DataFrame([{"strike": 100.0}])
+    raw_df.attrs["fetchDiagnostics"] = {"expirations_fetched": 2, "details": [{"attempt": 1}]}
     cleaned_df = pd.DataFrame(
         [
             {
@@ -32,6 +33,7 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
         return raw_df.copy()
 
     def fake_prepare_options_data(options_df, min_dte, max_dte, as_of_utc, **kwargs):
+        captured["clean_attrs"] = dict(options_df.attrs)
         captured["clean_dte_range"] = (min_dte, max_dte)
         captured["clean_as_of_utc"] = as_of_utc
         return cleaned_df.copy()
@@ -76,3 +78,7 @@ def test_build_surface_bundle_passes_requested_dte_range_to_fetch_clean_and_plot
     assert captured["selection_calls"] == 1
     assert captured["selected_quotes"].contractId.tolist() == [0]
     assert result.diagnostics["contract_outcomes"]["used"] == len(captured["selected_quotes"])
+
+    assert captured["clean_attrs"] == {}
+    assert result.diagnostics["fetch"] == raw_df.attrs["fetchDiagnostics"]
+    assert result.raw_options_df.attrs["fetchDiagnostics"] == raw_df.attrs["fetchDiagnostics"]

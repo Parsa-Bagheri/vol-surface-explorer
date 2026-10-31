@@ -3,10 +3,14 @@ from __future__ import annotations
 import os
 import hashlib
 from pathlib import Path
+from threading import Lock
 from typing import Any, Callable, Dict
 
-from flask import Flask, render_template, request, send_file
+from flask import Flask, g, render_template, request, send_file, url_for
+from datetime import datetime, timezone
+from src.plotly_assets import plotly_script_url
 from src.ticker_validation import validate_ticker_symbol as _validate_ticker_symbol
+from src.request_timing import install_request_timing, measure_phase, browser_timing_head, browser_timing_after_plot
 from src.surface_config import (
     DEFAULT_WEB_DTE_MIN, MAX_DTE, MAX_STRIKE_PCT, MIN_DTE, MIN_STRIKE_PCT, SurfaceRequest,
 )
@@ -44,8 +48,32 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
 }
 
+_runtime_prepare_lock = Lock()
+_runtime_prepared = False
+
+
+def _prepare_surface_runtime() -> None:
+    global _runtime_prepared
+    with _runtime_prepare_lock:
+        if _runtime_prepared:
+            return
+        from src import surface_service
+        from plotly.graph_objects import Figure, Surface
+        from src.numerical_engine import resolve_backend
+
+        # Fail readiness if an explicitly requested backend is unavailable.
+        # Prepare code/validators only: never fetch a quote or fit a surface.
+        resolve_backend(None)
+        figure = Figure(data=[Surface(z=[[0.2, 0.2], [0.2, 0.2]],
+                                      colorbar={"title": "IV (%)"})])
+        figure.update_layout(scene={"xaxis": {"title": "Strike Price"}})
+        figure.to_json()
+        _runtime_prepared = True
+
+
 def _default_surface_builder(request: Any) -> Any:
-    from src.surface_service import build_surface_bundle
+    with measure_phase("imports"):
+        from src.surface_service import build_surface_bundle
 
     return build_surface_bundle(request)
 
@@ -137,8 +165,11 @@ def _advanced_metric_cards(result: Any) -> list[dict[str, str]]:
 def create_app(
     surface_builder: Callable[[Any], Any] = _default_surface_builder,
     history_root: str | None = None,
+    runtime_preparer: Callable[[], None] = _prepare_surface_runtime,
 ) -> Flask:
     app = Flask(__name__)
+    plotly_js_url = plotly_script_url()
+    install_request_timing(app)
     app.config["MAX_CONTENT_LENGTH"] = 1024
     configured_history = history_root or os.environ.get("VOL_HISTORY_ROOT")
     app.config["HISTORY_ROOT"] = str((Path(__file__).parent / (configured_history or "history_bundle")).resolve())
@@ -154,7 +185,14 @@ def create_app(
             response.headers.setdefault(header, value)
         if request.endpoint == "index":
             if (request.args.get("ticker") or "").strip():
-                response.headers["Cache-Control"] = "no-store"
+                if getattr(g, "surface_cacheable", False):
+                    response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
+                    response.headers["Vercel-CDN-Cache-Control"] = "public, s-maxage=30"
+                    response.headers["X-Surface-Built-At"] = g.surface_built_at
+                    response.headers["X-Surface-Timing-Scope"] = "original-build"
+                else:
+                    response.headers["Cache-Control"] = "no-store"
+                    response.headers["Vercel-CDN-Cache-Control"] = "no-store"
             else:
                 response.headers["Cache-Control"] = "public, max-age=0"
                 response.headers["Vercel-CDN-Cache-Control"] = (
@@ -164,6 +202,11 @@ def create_app(
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    @app.post("/prepare-surface")
+    def prepare_surface():
+        runtime_preparer()
+        return "", 204, {"Cache-Control": "no-store"}
+
     @app.route("/", methods=["GET"])
     def index():
         values = _form_values()
@@ -172,6 +215,7 @@ def create_app(
         diagnostics = None
         surface_cards = []
         advanced_cards = []
+        built_at = None
 
         if values["ticker"]:
             try:
@@ -187,16 +231,25 @@ def create_app(
                         quality_mode="lenient",
                     )
                 )
-                plot_html = result.figure.to_html(
-                    full_html=False,
-                    include_plotlyjs="cdn",
-                    default_width="100%",
-                    default_height="100%",
-                    config={"responsive": True, "displaylogo": False},
-                )
+                if not result.figure.data:
+                    raise ValueError("No usable surface could be constructed. Try another range.")
+                built_at = datetime.now(timezone.utc).isoformat()
+                with measure_phase("html"):
+                    plot_html = result.figure.to_html(
+                        full_html=False,
+                        post_script=browser_timing_after_plot(built_at),
+                        include_plotlyjs=plotly_js_url,
+                        default_width="100%",
+                        default_height="100%",
+                        config={"responsive": True, "displaylogo": False},
+                    )
                 diagnostics = result.diagnostics
                 surface_cards = _surface_metric_cards(result)
                 advanced_cards = _advanced_metric_cards(result)
+                # The CDN keys by URL including the complete query. Never retain
+                # errors, empty figures or an explicit fresh-data request.
+                g.surface_cacheable = "fresh" not in request.args
+                g.surface_built_at = built_at
             except ValueError as exc:
                 error_message = str(exc)
             except Exception:
@@ -207,6 +260,10 @@ def create_app(
 
         return render_template(
             "index.html",
+            request_timing_script=browser_timing_head(),
+            built_at=built_at,
+            plotly_js_url=plotly_js_url,
+            fresh_url=url_for("index", **values, fresh="1"),
             values=values,
             min_dte=MIN_DTE,
             max_dte=MAX_DTE,

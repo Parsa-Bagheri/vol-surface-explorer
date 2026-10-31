@@ -7,6 +7,7 @@ from typing import Dict, Optional
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from src.request_timing import measure_phase
 
 from src.time_utils import expiration_close_utc, expiration_dte, normalize_as_of_utc
 
@@ -193,8 +194,13 @@ def _fetch_expiration_chain(
     max_fetch_attempts: int,
     poor_quality_zero_quote_ratio: float,
     retry_wait_seconds: float,
+    expiration_metadata: Optional[Dict[str, int]] = None,
 ) -> tuple[str, pd.DataFrame, pd.DataFrame, Dict[str, object]]:
     stock = yf.Ticker(ticker_symbol)
+    if expiration_metadata:
+        # yfinance 0.2.66 otherwise rediscovers all dates for every new Ticker.
+        # Each worker owns its map because option_chain() refreshes it.
+        stock._expirations = dict(expiration_metadata)
     chosen_calls = pd.DataFrame()
     chosen_puts = pd.DataFrame()
     chosen_health = None
@@ -260,7 +266,10 @@ def get_options_data(
     options_data_list = []
     fetch_diagnostics = []
     fetch_failures = {}
-    available_dates = stock.options # Get all available expiration dates
+    with measure_phase("expiry_discovery"):
+        available_dates = stock.options # Get all available expiration dates
+    metadata = getattr(stock, "_expirations", None)
+    expiration_metadata = dict(metadata) if isinstance(metadata, dict) else None
 
     if not available_dates:
         print(f"No option expiration dates found for {ticker_symbol}.")
@@ -325,6 +334,7 @@ def get_options_data(
                     max_fetch_attempts=max_fetch_attempts,
                     poor_quality_zero_quote_ratio=poor_quality_zero_quote_ratio,
                     retry_wait_seconds=retry_wait_seconds,
+                    expiration_metadata=expiration_metadata,
                 )
             except Exception as error:
                 fetch_failures[date] = {"expiration": date, "status": "failed", "error": str(error),
@@ -341,6 +351,7 @@ def get_options_data(
                     max_fetch_attempts,
                     poor_quality_zero_quote_ratio,
                     retry_wait_seconds,
+                    expiration_metadata,
                 ): date
                 for date in selected_dates
             }

@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from src.request_timing import measure_phase
 from scipy.optimize import Bounds, LinearConstraint, minimize
 from src.numerical_engine import prices, implied_volatilities, NumericalBackendError
 
@@ -554,12 +555,11 @@ def _build_arbitrage_free_surface(
         )
 
     surface_nodes = surface_nodes.copy()
-    surface_nodes["surfaceImpliedVolatility"] = surface_nodes.apply(
-        lambda row: slice_projected_iv.get(
-            (int(row["days_to_expiration"]), float(row["strike"])), float("nan")
-        ),
-        axis=1,
-    )
+    surface_nodes["surfaceImpliedVolatility"] = [
+        slice_projected_iv.get((int(dte), float(strike)), float("nan"))
+        for dte, strike in zip(surface_nodes["days_to_expiration"].to_numpy(),
+                               surface_nodes["strike"].to_numpy())
+    ]
     surface_nodes = surface_nodes.dropna(subset=["surfaceImpliedVolatility"]).copy()
 
     empty_grid = np.empty((0, 0), dtype=float)
@@ -661,12 +661,12 @@ def _build_arbitrage_free_surface(
             )
             adjusted_nodes[(int(item["days_to_expiration"]), float(strike))] = adjusted_iv
 
-    surface_nodes["surfaceImpliedVolatility"] = surface_nodes.apply(
-        lambda row: adjusted_nodes.get(
-            (int(row["days_to_expiration"]), float(row["strike"])), float(row["surfaceImpliedVolatility"])
-        ),
-        axis=1,
-    )
+    surface_nodes["surfaceImpliedVolatility"] = [
+        adjusted_nodes.get((int(dte), float(strike)), float(previous))
+        for dte, strike, previous in zip(surface_nodes["days_to_expiration"].to_numpy(),
+                                         surface_nodes["strike"].to_numpy(),
+                                         surface_nodes["surfaceImpliedVolatility"].to_numpy())
+    ]
     return adjusted_nodes, grid_strike, grid_dte, iv_grid, surface_nodes
 
 
@@ -808,15 +808,16 @@ def create_vol_surface(
     smooth_dte_step = max(1, int(np.ceil(dte_span / max(MAX_SMOOTH_DTE_GRID_POINTS - 1, 1))))
 
     try:
-        _, grid_strike, grid_dte, iv_grid, surface_nodes = _build_arbitrage_free_surface(
-            df=surface_input_df,
-            underlying_price=float(underlying_price),
-            risk_free_rate=risk_free_rate,
-            dividend_yield=dividend_yield,
-            dte_step=smooth_dte_step,
-            build_smooth_grid=bool(smooth),
-            selected_quotes=selected_quotes,
-        )
+        with measure_phase("fitting"):
+            _, grid_strike, grid_dte, iv_grid, surface_nodes = _build_arbitrage_free_surface(
+                df=surface_input_df,
+                underlying_price=float(underlying_price),
+                risk_free_rate=risk_free_rate,
+                dividend_yield=dividend_yield,
+                dte_step=smooth_dte_step,
+                build_smooth_grid=bool(smooth),
+                selected_quotes=selected_quotes,
+            )
     except NumericalBackendError:
         raise
     except Exception as exc:

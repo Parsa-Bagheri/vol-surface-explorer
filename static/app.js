@@ -131,3 +131,27 @@ const setupLoadingState = () => {
 };
 
 setupLoadingState();
+
+const setupRuntimePreparation = () => {
+  const form = document.querySelector(".control-form");
+  if (!form) {
+    return;
+  }
+  // Start while the user enters the ticker/ranges; surface submission stays
+  // independent so a failed preparation request cannot block a build.
+  form.addEventListener("focusin", () => {
+    fetch("/prepare-surface", { method: "POST", cache: "no-store" }).catch(() => {});
+  }, { once: true });
+};
+
+setupRuntimePreparation();
+
+
+// The form stays usable if the chart CDN is unavailable.
+const chartContainer = document.querySelector(".surface-card:not(.loading-surface-card) .plot-wrapper");
+if (chartContainer?.querySelector(".plotly-graph-div") && typeof window.Plotly === "undefined") {
+  const message = document.createElement("p");
+  message.setAttribute("role", "alert");
+  message.textContent = "The chart library could not load. Reload the page to try again.";
+  chartContainer.replaceChildren(message);
+}

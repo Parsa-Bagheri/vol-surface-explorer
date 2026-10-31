@@ -1,0 +1,88 @@
+[
+  {
+    "ticker": "SPY",
+    "backend": "python",
+    "smooth": false,
+    "exact_parity": true
+  },
+  {
+    "ticker": "SPY",
+    "backend": "python",
+    "smooth": true,
+    "exact_parity": true
+  },
+  {
+    "ticker": "SPY",
+    "backend": "cpp",
+    "smooth": false,
+    "exact_parity": true
+  },
+  {
+    "ticker": "SPY",
+    "backend": "cpp",
+    "smooth": true,
+    "exact_parity": true
+  },
+  {
+    "ticker": "SPY",
+    "cpp_smooth_seconds": {
+      "before": [
+        2.0231093999464065,
+        2.0766676000785083,
+        2.021096100099385
+      ],
+      "after": [
+        1.6041290999855846,
+        1.589198200032115,
+        1.58963559998665
+      ]
+    },
+    "medians": {
+      "before": 2.0231093999464065,
+      "after": 1.58963559998665
+    }
+  },
+  {
+    "ticker": "TSLA",
+    "backend": "python",
+    "smooth": false,
+    "exact_parity": true
+  },
+  {
+    "ticker": "TSLA",
+    "backend": "python",
+    "smooth": true,
+    "exact_parity": true
+  },
+  {
+    "ticker": "TSLA",
+    "backend": "cpp",
+    "smooth": false,
+    "exact_parity": true
+  },
+  {
+    "ticker": "TSLA",
+    "backend": "cpp",
+    "smooth": true,
+    "exact_parity": true
+  },
+  {
+    "ticker": "TSLA",
+    "cpp_smooth_seconds": {
+      "before": [
+        1.5945154000073671,
+        1.5969065999379382,
+        1.5927396999904886
+      ],
+      "after": [
+        1.5385375999612734,
+        1.531983399996534,
+        1.5315463000442833
+      ]
+    },
+    "medians": {
+      "before": 1.5945154000073671,
+      "after": 1.531983399996534
+    }
+  }
+]

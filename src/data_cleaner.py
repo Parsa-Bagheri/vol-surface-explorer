@@ -545,7 +545,7 @@ def _estimate_forward_terms(
 
 
 def _resolve_row_iv(
-    row: pd.Series,
+    row: dict,
     quality_mode: str,
     underlying_price: float,
     risk_free_rate: float,
@@ -553,7 +553,7 @@ def _resolve_row_iv(
     max_trade_age_hours: float,
     now_utc: pd.Timestamp,
     precomputed: tuple | None = None,
-) -> pd.Series:
+) -> dict:
     flags: Set[str] = set()
     quality_config = QUALITY_MODE_CONFIG[quality_mode]
     spread_ratio_max = quality_config["spread_ratio_max"]
@@ -741,26 +741,24 @@ def _resolve_row_iv(
     confidence_multiplier = {"high": 1.0, "medium": 0.6, "low": 0.25}[confidence_level]
     surface_weight = max(0.05, confidence_multiplier * (0.5 + liquidity_score) * spread_penalty)
 
-    return pd.Series(
-        {
-            "marketPrice": market_price,
-            "priceSourceUsed": price_source,
-            "spreadRatio": spread_ratio,
-            "blackScholesImpliedVolatility": bs_iv,
-            "bidImpliedVolatility": bid_iv,
-            "askImpliedVolatility": ask_iv,
-            "ivBidAskWidth": iv_bid_ask_width,
-            "ivBidAskWidthRatio": iv_bid_ask_width_ratio,
-            "impliedVolatilityFinal": implied_vol_final,
-            "confidenceLevel": confidence_level,
-            "includeInSurface": bool(include_in_surface),
-            "surfaceWeight": float(surface_weight),
-            "qualityFlags": ";".join(sorted(flags)) if flags else "none",
-        }
-    )
+    return {
+        "marketPrice": market_price,
+        "priceSourceUsed": price_source,
+        "spreadRatio": spread_ratio,
+        "blackScholesImpliedVolatility": bs_iv,
+        "bidImpliedVolatility": bid_iv,
+        "askImpliedVolatility": ask_iv,
+        "ivBidAskWidth": iv_bid_ask_width,
+        "ivBidAskWidthRatio": iv_bid_ask_width_ratio,
+        "impliedVolatilityFinal": implied_vol_final,
+        "confidenceLevel": confidence_level,
+        "includeInSurface": bool(include_in_surface),
+        "surfaceWeight": float(surface_weight),
+        "qualityFlags": ";".join(sorted(flags)) if flags else "none",
+    }
 
 
-def _batch_quote_ivs(df, spot, rate, quality_mode, max_trade_age_hours, as_of_utc):
+def _batch_quote_ivs(df, spot, rate, quality_mode, max_trade_age_hours, as_of_utc, records=None):
     """Keep quote selection in Python and invert all three quote prices once.
 
     Consume results in row order so duplicate input indices cannot affect joins.
@@ -768,8 +766,8 @@ def _batch_quote_ivs(df, spot, rate, quality_mode, max_trade_age_hours, as_of_ut
     from src.numerical_engine import implied_volatilities
     config = QUALITY_MODE_CONFIG[quality_mode]
     # iterrows() constructs a Series and deep-copies attached fetch diagnostics
-    # for every row. Only these four quote fields are needed by the selector.
-    quote_records = df[["bid", "ask", "lastPrice", "lastTradeDate"]].to_dict("records")
+    # for every row. Reuse resolver records, or select four fields for standalone calls.
+    quote_records = records if records is not None else df[["bid", "ask", "lastPrice", "lastTradeDate"]].to_dict("records")
     selections = [_select_market_price(row, max_trade_age_hours, config["spread_ratio_max"],
                     config["recompute_spread_ratio_max"], as_of_utc) for row in quote_records]
     market = np.array([selection[0] for selection in selections], dtype=float)
@@ -915,10 +913,13 @@ def prepare_options_data(
 
     from src.numerical_engine import current_backend, resolve_backend
     backend = resolve_backend(numerical_backend) if numerical_backend is not None else current_backend()
+    # Reuse lightweight records for quote selection and resolution. Construct the
+    # result frame once instead of constructing a Series for every option.
+    records = clean_df.to_dict("records")
     precomputed = _batch_quote_ivs(clean_df, underlying_price, risk_free_rate, quality_mode,
-                                  max_trade_age_hours, as_of_utc) if backend == "cpp" else None
-    resolved = clean_df.apply(
-        lambda row: _resolve_row_iv(
+                                  max_trade_age_hours, as_of_utc, records=records) if backend == "cpp" else None
+    resolved = pd.DataFrame.from_records([
+        _resolve_row_iv(
             row=row,
             quality_mode=quality_mode,
             underlying_price=underlying_price,
@@ -927,9 +928,8 @@ def prepare_options_data(
             max_trade_age_hours=max_trade_age_hours,
             now_utc=as_of_utc,
             precomputed=next(precomputed) if precomputed is not None else None,
-        ),
-        axis=1,
-    )
+        ) for row in records
+    ], index=clean_df.index)
     clean_df = pd.concat([clean_df, resolved], axis=1)
     clean_df["impliedVolatility"] = clean_df["impliedVolatilityFinal"]
 

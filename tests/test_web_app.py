@@ -90,8 +90,8 @@ def test_index_builds_surface_from_query_params():
     assert captured["request"].dte_min == 14
     assert captured["request"].dte_max == 90
     assert captured["request"].smooth is True
-    assert response.headers["Cache-Control"] == "no-store"
-    assert "Vercel-CDN-Cache-Control" not in response.headers
+    assert response.headers["Cache-Control"] == "public, max-age=0, must-revalidate"
+    assert response.headers["Vercel-CDN-Cache-Control"] == "public, s-maxage=30"
 
 
 def test_index_has_no_iv_source_selector():
@@ -242,3 +242,114 @@ def test_empty_homepage_does_not_import_the_financial_stack():
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_preparation_is_explicit_and_does_not_fetch_or_build_a_surface():
+    calls = []
+
+    def unexpected_builder(request):
+        pytest.fail("Preparing runtime must not fetch/build a surface")
+
+    app = create_app(surface_builder=unexpected_builder,
+                     runtime_preparer=lambda: calls.append("prepared"))
+    client = app.test_client()
+    assert client.get("/").status_code == 200
+    assert calls == []
+    assert client.get("/prepare-surface").status_code == 405
+    response = client.post("/prepare-surface")
+    assert response.status_code == 204
+    assert response.headers["Cache-Control"] == "no-store"
+    assert calls == ["prepared"]
+
+
+def test_runtime_preparation_is_once_per_worker_and_never_fetches(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import web_app
+    import src.data_fetch as data_fetch
+    import src.numerical_engine as numerical_engine
+
+    calls = []
+    monkeypatch.setattr(web_app, "_runtime_prepared", False)
+    monkeypatch.setattr(numerical_engine, "resolve_backend", lambda _: calls.append("backend") or "python")
+    def forbidden(*args, **kwargs):
+        pytest.fail("Runtime readiness must not access market data")
+    monkeypatch.setattr(data_fetch, "get_current_price", forbidden)
+    monkeypatch.setattr(data_fetch, "get_options_data", forbidden)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: web_app._prepare_surface_runtime(), range(8)))
+    assert calls == ["backend"]
+    assert web_app._runtime_prepared
+
+
+def test_vercel_entrypoint_prepares_before_serving(monkeypatch):
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    env = dict(os.environ, VOL_NUMERICAL_BACKEND="python", VOL_REQUEST_TIMING="1",
+               PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run([sys.executable, "-c",
+        "import api.index; import web_app; assert web_app._runtime_prepared"],
+        cwd=Path(__file__).resolve().parents[1], env=env,
+        capture_output=True, text=True, timeout=45)
+    assert result.returncode == 0, result.stderr
+    record = json.loads(result.stdout.split("VOLEXPLORER_TIMING ", 1)[1])
+    assert record["event"] == "runtime_ready"
+    assert record["preparation_ms"] > 0
+
+
+def test_surface_cache_has_freshness_and_explicit_bypass():
+    client = create_app(surface_builder=_build_result).test_client()
+    response = client.get("/?ticker=SPY&dte_min=2&dte_max=60")
+    assert response.headers["Vercel-CDN-Cache-Control"] == "public, s-maxage=30"
+    assert response.headers["X-Surface-Built-At"].encode() in response.data
+    assert b"Fetch latest" in response.data and b"fresh=1" in response.data
+    assert response.headers["X-Surface-Timing-Scope"] == "original-build"
+    fresh = client.get("/?ticker=SPY&dte_min=2&dte_max=60&fresh=1")
+    assert fresh.headers["Cache-Control"] == "no-store"
+    assert fresh.headers["Vercel-CDN-Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("ticker", ["<script>", "SPY"])
+def test_failed_or_empty_surfaces_are_never_cached(ticker):
+    def empty(request):
+        result = _build_result(request)
+        result.figure = go.Figure()
+        return result
+    response = create_app(surface_builder=empty).test_client().get("/", query_string={"ticker": ticker})
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Vercel-CDN-Cache-Control"] == "no-store"
+    assert b'class="message-card error-card"' in response.data
+    assert b'class="surface-freshness"' not in response.data
+
+
+def test_cacheable_responses_preserve_distinct_query_controls():
+    client = create_app(surface_builder=_build_result).test_client()
+    for ticker, dte in [("SPY", 2), ("TSLA", 7)]:
+        response = client.get("/", query_string={"ticker": ticker, "dte_min": dte, "dte_max": 60, "smooth": 0})
+        assert (ticker + " surface").encode() in response.data
+        assert f'dte_min={dte}'.encode() in response.data
+        assert b"smooth=False" in response.data
+
+
+def test_homepage_preloads_exactly_the_chart_script():
+    import re
+    from src.plotly_assets import plotly_script_url
+    client = create_app(surface_builder=_build_result).test_client()
+    homepage = client.get("/").get_data(as_text=True)
+    chart = client.get("/?ticker=SPY").get_data(as_text=True)
+    url = plotly_script_url()
+    assert f'<link rel="preload" href="{url}" as="script">' in homepage
+    scripts = re.findall(r'<script[^>]+src="([^"]+)"', chart)
+    assert [script for script in scripts if "cdn.plot.ly" in script] == [url]
+
+
+def test_build_hook_updates_manifest_to_installed_plotly(tmp_path, monkeypatch):
+    import json
+    import vercel_install
+    from plotly.offline import get_plotlyjs_version
+    monkeypatch.setattr(vercel_install, "__file__", str(tmp_path / "vercel_install.py"))
+    vercel_install.write_plotly_manifest()
+    data = json.loads((tmp_path / "static/plotly-version.json").read_text())
+    assert data["version"] == get_plotlyjs_version()

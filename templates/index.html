@@ -1,9 +1,11 @@
 <!doctype html>
 <html lang="en">
 <head>
+  {{ request_timing_script|safe }}
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Volatility Surface Explorer</title>
+  <link rel="preload" href="{{ plotly_js_url }}" as="script">
   <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=asset_versions['app.css']) }}">
   <script src="{{ url_for('static', filename='app.js', v=asset_versions['app.js']) }}" defer></script>
 </head>
@@ -89,6 +91,8 @@
               </div>
             {% endif %}
           </div>
+          <p class="surface-freshness">Built <time datetime="{{ built_at }}">{{ built_at[:10] }} {{ built_at[11:19] }} UTC</time>.
+            Results may be reused for up to 30 seconds. <a href="{{ fresh_url }}">Fetch latest</a></p>
           <div class="plot-wrapper">
             {{ plot_html|safe }}
             <div class="plot-loading-overlay" role="status" aria-live="polite" aria-hidden="true">
