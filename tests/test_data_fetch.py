@@ -179,3 +179,37 @@ def test_price_observation_records_history_fallback_and_source_time(monkeypatch)
     assert result["value"] == 101.25
     assert result["method"] == "history:5d:Close"
     assert result["source_timestamp_utc"] == "2026-10-12T20:00:00+00:00"
+
+
+def test_workers_reuse_discovery_and_keep_independent_expiration_maps(monkeypatch):
+    instances = []
+    discovery_calls = []
+    dates = ("2026-10-16", "2026-10-23")
+
+    class FakeTicker:
+        def __init__(self, ticker):
+            self._expirations = {}
+            instances.append(self)
+
+        @property
+        def options(self):
+            discovery_calls.append(True)
+            self._expirations = {date: index for index, date in enumerate(dates)}
+            return dates
+
+        def option_chain(self, expiration):
+            if not self._expirations:
+                self.options
+            assert expiration in self._expirations
+            return _fake_chain(expiration)
+
+    monkeypatch.setattr(data_fetch.yf, "Ticker", FakeTicker)
+    result = data_fetch.get_options_data("SPY", retry_on_poor_quality=False,
+                                         as_of_utc=pd.Timestamp("2026-10-13T18:00:00Z"))
+    assert len(discovery_calls) == 1
+    assert result.attrs["fetchDiagnostics"]["expirations_fetched"] == 2
+    assert set(result["expirationDate"].dt.strftime("%Y-%m-%d")) == set(dates)
+    assert len(instances) == 3
+    assert len({id(instance._expirations) for instance in instances}) == 3
+    instances[1]._expirations["worker-only"] = 123
+    assert all("worker-only" not in instance._expirations for instance in (instances[0], instances[2]))
