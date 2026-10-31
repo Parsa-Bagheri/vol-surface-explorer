@@ -90,6 +90,8 @@
               </div>
             {% endif %}
           </div>
+          <p class="surface-freshness">Built <time datetime="{{ built_at }}">{{ built_at[:10] }} {{ built_at[11:19] }} UTC</time>.
+            Results may be reused for up to 30 seconds. <a href="{{ fresh_url }}">Fetch latest</a></p>
           <div class="plot-wrapper">
             {{ plot_html|safe }}
             <div class="plot-loading-overlay" role="status" aria-live="polite" aria-hidden="true">

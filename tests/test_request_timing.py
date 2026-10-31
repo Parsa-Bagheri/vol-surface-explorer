@@ -94,13 +94,13 @@ def test_web_surface_response_keeps_body_and_measures_html(monkeypatch, capsys):
     from web_app import create_app
     def builder(surface_request):
         return SimpleNamespace(current_price=123.45, raw_options_df=[1],
-            figure=SimpleNamespace(to_html=lambda **kwargs: '<div id="test-chart">chart</div>'),
+            figure=SimpleNamespace(data=[1], to_html=lambda **kwargs: '<div id="test-chart">chart</div>'),
             diagnostics={"request": {"dte_min": surface_request.dte_min, "dte_max": surface_request.dte_max},
                          "surface_dte_min": 2, "surface_dte_max": 60, "contract_outcomes": {"used": 1}})
     response = create_app(surface_builder=builder).test_client().get("/?ticker=SPY&dte_min=2&dte_max=60")
     assert response.status_code == 200
     assert b'id="test-chart"' in response.data
-    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Cache-Control"] == "public, max-age=0, must-revalidate"
     assert "html;dur=" in response.headers["Server-Timing"]
     assert _records(capsys)[0]["ticker"] == "SPY"
 
@@ -109,3 +109,20 @@ def test_phase_without_web_request_preserves_exception():
     with pytest.raises(RuntimeError, match="same error"):
         with measure_phase("surface"):
             raise RuntimeError("same error")
+
+
+def test_nested_failure_preserves_deepest_phase(monkeypatch, capsys):
+    monkeypatch.setenv("VOL_REQUEST_TIMING", "1")
+    app = Flask(__name__)
+    install_request_timing(app)
+    @app.get("/")
+    def index():
+        with measure_phase("options"):
+            with measure_phase("expiry_discovery"):
+                raise ValueError("not logged")
+    @app.errorhandler(ValueError)
+    def failed(error):
+        return "unavailable", 503
+    response = app.test_client().get("/?ticker=SPY")
+    assert response.status_code == 503
+    assert _records(capsys)[0]["error_phase"] == "expiry_discovery"

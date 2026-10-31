@@ -6,7 +6,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict
 
-from flask import Flask, render_template, request, send_file
+from flask import Flask, g, render_template, request, send_file, url_for
+from datetime import datetime, timezone
 from src.ticker_validation import validate_ticker_symbol as _validate_ticker_symbol
 from src.request_timing import install_request_timing, measure_phase, browser_timing_head, browser_timing_after_plot
 from src.surface_config import (
@@ -182,7 +183,14 @@ def create_app(
             response.headers.setdefault(header, value)
         if request.endpoint == "index":
             if (request.args.get("ticker") or "").strip():
-                response.headers["Cache-Control"] = "no-store"
+                if getattr(g, "surface_cacheable", False):
+                    response.headers["Cache-Control"] = "public, max-age=0, must-revalidate"
+                    response.headers["Vercel-CDN-Cache-Control"] = "public, s-maxage=30"
+                    response.headers["X-Surface-Built-At"] = g.surface_built_at
+                    response.headers["X-Surface-Timing-Scope"] = "original-build"
+                else:
+                    response.headers["Cache-Control"] = "no-store"
+                    response.headers["Vercel-CDN-Cache-Control"] = "no-store"
             else:
                 response.headers["Cache-Control"] = "public, max-age=0"
                 response.headers["Vercel-CDN-Cache-Control"] = (
@@ -205,6 +213,7 @@ def create_app(
         diagnostics = None
         surface_cards = []
         advanced_cards = []
+        built_at = None
 
         if values["ticker"]:
             try:
@@ -220,10 +229,13 @@ def create_app(
                         quality_mode="lenient",
                     )
                 )
+                if not result.figure.data:
+                    raise ValueError("No usable surface could be constructed. Try another range.")
+                built_at = datetime.now(timezone.utc).isoformat()
                 with measure_phase("html"):
                     plot_html = result.figure.to_html(
                         full_html=False,
-                        post_script=browser_timing_after_plot(),
+                        post_script=browser_timing_after_plot(built_at),
                         include_plotlyjs="cdn",
                         default_width="100%",
                         default_height="100%",
@@ -232,6 +244,10 @@ def create_app(
                 diagnostics = result.diagnostics
                 surface_cards = _surface_metric_cards(result)
                 advanced_cards = _advanced_metric_cards(result)
+                # The CDN keys by URL including the complete query. Never retain
+                # errors, empty figures or an explicit fresh-data request.
+                g.surface_cacheable = "fresh" not in request.args
+                g.surface_built_at = built_at
             except ValueError as exc:
                 error_message = str(exc)
             except Exception:
@@ -243,6 +259,8 @@ def create_app(
         return render_template(
             "index.html",
             request_timing_script=browser_timing_head(),
+            built_at=built_at,
+            fresh_url=url_for("index", **values, fresh="1"),
             values=values,
             min_dte=MIN_DTE,
             max_dte=MAX_DTE,

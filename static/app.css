@@ -670,3 +670,12 @@ body.is-loading .error-card {
     min-height: 420px;
   }
 }
+
+.surface-freshness {
+  margin: 0;
+  padding: 0 24px 14px;
+  color: #bdc6d4;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.surface-freshness a { color: #e1ecff; }

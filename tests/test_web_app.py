@@ -90,8 +90,8 @@ def test_index_builds_surface_from_query_params():
     assert captured["request"].dte_min == 14
     assert captured["request"].dte_max == 90
     assert captured["request"].smooth is True
-    assert response.headers["Cache-Control"] == "no-store"
-    assert "Vercel-CDN-Cache-Control" not in response.headers
+    assert response.headers["Cache-Control"] == "public, max-age=0, must-revalidate"
+    assert response.headers["Vercel-CDN-Cache-Control"] == "public, s-maxage=30"
 
 
 def test_index_has_no_iv_source_selector():
@@ -297,3 +297,37 @@ def test_vercel_entrypoint_prepares_before_serving(monkeypatch):
     record = json.loads(result.stdout.split("VOLEXPLORER_TIMING ", 1)[1])
     assert record["event"] == "runtime_ready"
     assert record["preparation_ms"] > 0
+
+
+def test_surface_cache_has_freshness_and_explicit_bypass():
+    client = create_app(surface_builder=_build_result).test_client()
+    response = client.get("/?ticker=SPY&dte_min=2&dte_max=60")
+    assert response.headers["Vercel-CDN-Cache-Control"] == "public, s-maxage=30"
+    assert response.headers["X-Surface-Built-At"].encode() in response.data
+    assert b"Fetch latest" in response.data and b"fresh=1" in response.data
+    assert response.headers["X-Surface-Timing-Scope"] == "original-build"
+    fresh = client.get("/?ticker=SPY&dte_min=2&dte_max=60&fresh=1")
+    assert fresh.headers["Cache-Control"] == "no-store"
+    assert fresh.headers["Vercel-CDN-Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("ticker", ["<script>", "SPY"])
+def test_failed_or_empty_surfaces_are_never_cached(ticker):
+    def empty(request):
+        result = _build_result(request)
+        result.figure = go.Figure()
+        return result
+    response = create_app(surface_builder=empty).test_client().get("/", query_string={"ticker": ticker})
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Vercel-CDN-Cache-Control"] == "no-store"
+    assert b'class="message-card error-card"' in response.data
+    assert b'class="surface-freshness"' not in response.data
+
+
+def test_cacheable_responses_preserve_distinct_query_controls():
+    client = create_app(surface_builder=_build_result).test_client()
+    for ticker, dte in [("SPY", 2), ("TSLA", 7)]:
+        response = client.get("/", query_string={"ticker": ticker, "dte_min": dte, "dte_max": 60, "smooth": 0})
+        assert (ticker + " surface").encode() in response.data
+        assert f'dte_min={dte}'.encode() in response.data
+        assert b"smooth=False" in response.data

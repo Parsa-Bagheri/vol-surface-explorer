@@ -25,7 +25,7 @@ document.addEventListener('click', function(event) {
 </script>"""
 
 
-def browser_timing_after_plot():
+def browser_timing_after_plot(built_at=None):
     if os.environ.get("VOL_REQUEST_TIMING") != "1":
         return None
     state = _active.get()
@@ -41,13 +41,14 @@ def browser_timing_after_plot():
     const nav = performance.getEntriesByType('navigation')[0];
     console.info('VOLEXPLORER_BROWSER_TIMING', JSON.stringify({
       runtime_id:__RUNTIME_ID__, surface_request_number:__SEQUENCE__,
+      surface_built_utc:__BUILT_AT__, server_timing_scope:'original-build',
       clicked_utc:new Date(click.epochMs).toISOString(), click_to_chart_ms:finished-click.epochMs,
       request_to_first_byte_ms:nav ? nav.responseStart-nav.requestStart : null,
       server_timing:nav ? nav.serverTiming.map(function(x) {return {name:x.name,duration_ms:x.duration};}) : []
     }));
   } catch (error) {}
 }); });"""
-    return script.replace("__RUNTIME_ID__", json.dumps(_runtime_id)).replace("__SEQUENCE__", str(sequence))
+    return script.replace("__RUNTIME_ID__", json.dumps(_runtime_id)).replace("__SEQUENCE__", str(sequence)).replace("__BUILT_AT__", json.dumps(built_at))
 
 
 def _emit(record):
@@ -74,8 +75,8 @@ def measure_phase(name):
     try:
         yield
     except Exception as error:
-        state["error_phase"] = name
-        state["error_type"] = type(error).__name__
+        state.setdefault("error_phase", name)
+        state.setdefault("error_type", type(error).__name__)
         raise
     finally:
         row = state["phases"].setdefault(name, {"wall_ms": 0.0, "thread_cpu_ms": 0.0})
